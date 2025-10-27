@@ -1,0 +1,8 @@
+kernel line : count latency dram_traffic smem_bk_conflicts smem_warp gmem_access_generated gmem_warp exposed_latency warp_divergence
+test.1.sm_86.ptx 31 : 1 5 0 0 0 0 0 0 0 
+test.1.sm_86.ptx 30 : 1 4 0 0 0 1 1 0 0 
+test.1.sm_86.ptx 29 : 1 9 0 0 0 0 0 0 0 
+test.1.sm_86.ptx 28 : 1 6 0 0 0 0 0 0 0 
+test.1.sm_86.ptx 27 : 1 3 0 0 0 0 0 0 0 
+test.1.sm_86.ptx 26 : 1 3 0 0 0 0 0 0 0 
+test.1.sm_86.ptx 25 : 1 3 0 0 0 0 0 0 0 
