@@ -5,7 +5,7 @@
 # Configuration parameters
 BUILD_TYPE=release  # release or debug
 CLEAN_BUILD=0       # 1=clean build; 0=incremental build
-JOBS=4              # number of parallel jobs for compilation (-j parameter)
+JOBS=16             # number of parallel jobs for compilation (-j parameter)
 
 # Color output
 RED='\033[0;31m'

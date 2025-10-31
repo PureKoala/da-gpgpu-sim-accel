@@ -62,3 +62,9 @@ accel-sim-framework/
 gpu-app-collection/
 
 setup
+
+deAttn/sim/
+deAttn/bin/
+deAttn/out/
+**.o
+bin/

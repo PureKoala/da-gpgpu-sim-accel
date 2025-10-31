@@ -75,8 +75,12 @@ else
 
 	if [ ${IFBUILD} -eq 1 ] 
 	then
-		echo "build" ${NAME}.cu
-		nvcc -arch=${ARCH} --cudart shared ${SRC}/${NAME}.cu -o ${BIN}/${NAME} 
+		echo "build" ${NAME}.cu "and all deform_attn sources"
+		# 编译主程序和所有依赖的CUDA源文件
+		nvcc -arch=${ARCH} --cudart shared -I${SRC} \
+		     ${SRC}/${NAME}.cu \
+		     ${SRC}/deform_attn/cuda/ms_deform_attn_cuda_kernel.cu \
+		     -o ${BIN}/${NAME}
 	else 
 		echo "skip build from source"
 	fi
