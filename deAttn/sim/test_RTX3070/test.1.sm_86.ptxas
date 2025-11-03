@@ -1,1 +1,17 @@
 ptxas info    : 0 bytes gmem
+ptxas info    : Compiling entry function '_Z31predict_attn_int8_ampere_kernelILi16ELi16ELi16EEvPKaS1_Piiii' for 'sm_86'
+ptxas info    : Function properties for _Z31predict_attn_int8_ampere_kernelILi16ELi16ELi16EEvPKaS1_Piiii
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 40 registers, 388 bytes cmem[0]
+ptxas info    : Compiling entry function '_Z29predict_so_int8_ampere_kernelILi16ELi16ELi16EEvPKaS1_Piiii' for 'sm_86'
+ptxas info    : Function properties for _Z29predict_so_int8_ampere_kernelILi16ELi16ELi16EEvPKaS1_Piiii
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 40 registers, 388 bytes cmem[0]
+ptxas info    : Compiling entry function '_Z22dequantize_attn_kernelPKiPffii' for 'sm_86'
+ptxas info    : Function properties for _Z22dequantize_attn_kernelPKiPffii
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 10 registers, 380 bytes cmem[0]
+ptxas info    : Compiling entry function '_Z20dequantize_so_kernelPKiPfPKffiib' for 'sm_86'
+ptxas info    : Function properties for _Z20dequantize_so_kernelPKiPfPKffiib
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 12 registers, 389 bytes cmem[0]

@@ -11,4 +11,282 @@
 .address_size 64
 
 
+.entry _Z20dequantize_so_kernelPKiPfPKffiib(
+.param .u64 _Z20dequantize_so_kernelPKiPfPKffiib_param_0,
+.param .u64 _Z20dequantize_so_kernelPKiPfPKffiib_param_1,
+.param .u64 _Z20dequantize_so_kernelPKiPfPKffiib_param_2,
+.param .f32 _Z20dequantize_so_kernelPKiPfPKffiib_param_3,
+.param .u32 _Z20dequantize_so_kernelPKiPfPKffiib_param_4,
+.param .u32 _Z20dequantize_so_kernelPKiPfPKffiib_param_5,
+.param .u8 _Z20dequantize_so_kernelPKiPfPKffiib_param_6
+)
+{
+.reg .pred %p<5>;
+.reg .b16 %rs<2>;
+.reg .f32 %f<8>;
+.reg .b32 %r<9>;
+.reg .b64 %rd<13>;
+
+
+ld.param.s8 %rs1, [_Z20dequantize_so_kernelPKiPfPKffiib_param_6];
+ld.param.u64 %rd1, [_Z20dequantize_so_kernelPKiPfPKffiib_param_0];
+ld.param.u64 %rd2, [_Z20dequantize_so_kernelPKiPfPKffiib_param_1];
+ld.param.u64 %rd3, [_Z20dequantize_so_kernelPKiPfPKffiib_param_2];
+ld.param.f32 %f4, [_Z20dequantize_so_kernelPKiPfPKffiib_param_3];
+ld.param.u32 %r2, [_Z20dequantize_so_kernelPKiPfPKffiib_param_4];
+ld.param.u32 %r3, [_Z20dequantize_so_kernelPKiPfPKffiib_param_5];
+mov.u32 %r4, %ntid.x;
+mov.u32 %r5, %ctaid.x;
+mov.u32 %r6, %tid.x;
+mad.lo.s32 %r1, %r5, %r4, %r6;
+setp.ge.s32 %p1, %r1, %r3;
+@%p1 bra $L__BB0_4;
+
+cvta.to.global.u64 %rd4, %rd1;
+mul.wide.s32 %rd5, %r1, 4;
+add.s64 %rd6, %rd4, %rd5;
+ld.global.nc.u32 %r7, [%rd6];
+sub.s32 %r8, %r7, %r2;
+cvt.rn.f32.s32 %f5, %r8;
+mul.f32 %f7, %f5, %f4;
+setp.eq.s64 %p2, %rd3, 0;
+setp.eq.s16 %p3, %rs1, 0;
+or.pred %p4, %p2, %p3;
+@%p4 bra $L__BB0_3;
+
+cvta.to.global.u64 %rd7, %rd3;
+add.s64 %rd9, %rd7, %rd5;
+ld.global.nc.f32 %f6, [%rd9];
+add.f32 %f7, %f7, %f6;
+
+$L__BB0_3:
+cvta.to.global.u64 %rd10, %rd2;
+add.s64 %rd12, %rd10, %rd5;
+st.global.f32 [%rd12], %f7;
+
+$L__BB0_4:
+ret;
+
+}
+.entry _Z22dequantize_attn_kernelPKiPffii(
+.param .u64 _Z22dequantize_attn_kernelPKiPffii_param_0,
+.param .u64 _Z22dequantize_attn_kernelPKiPffii_param_1,
+.param .f32 _Z22dequantize_attn_kernelPKiPffii_param_2,
+.param .u32 _Z22dequantize_attn_kernelPKiPffii_param_3,
+.param .u32 _Z22dequantize_attn_kernelPKiPffii_param_4
+)
+{
+.reg .pred %p<2>;
+.reg .f32 %f<8>;
+.reg .b32 %r<9>;
+.reg .b64 %rd<8>;
+
+
+ld.param.u64 %rd1, [_Z22dequantize_attn_kernelPKiPffii_param_0];
+ld.param.u64 %rd2, [_Z22dequantize_attn_kernelPKiPffii_param_1];
+ld.param.f32 %f1, [_Z22dequantize_attn_kernelPKiPffii_param_2];
+ld.param.u32 %r2, [_Z22dequantize_attn_kernelPKiPffii_param_3];
+ld.param.u32 %r3, [_Z22dequantize_attn_kernelPKiPffii_param_4];
+mov.u32 %r4, %ctaid.x;
+mov.u32 %r5, %ntid.x;
+mov.u32 %r6, %tid.x;
+mad.lo.s32 %r1, %r4, %r5, %r6;
+setp.ge.s32 %p1, %r1, %r3;
+@%p1 bra $L__BB1_2;
+
+cvta.to.global.u64 %rd3, %rd1;
+mul.wide.s32 %rd4, %r1, 4;
+add.s64 %rd5, %rd3, %rd4;
+ld.global.nc.u32 %r7, [%rd5];
+sub.s32 %r8, %r7, %r2;
+cvt.rn.f32.s32 %f2, %r8;
+mul.f32 %f3, %f2, %f1;
+mov.f32 %f4, 0f3F800000;
+min.f32 %f5, %f4, %f3;
+mov.f32 %f6, 0f00000000;
+max.f32 %f7, %f6, %f5;
+cvta.to.global.u64 %rd6, %rd2;
+add.s64 %rd7, %rd6, %rd4;
+st.global.f32 [%rd7], %f7;
+
+$L__BB1_2:
+ret;
+
+}
+.entry _Z29predict_so_int8_ampere_kernelILi16ELi16ELi16EEvPKaS1_Piiii(
+.param .u64 _Z29predict_so_int8_ampere_kernelILi16ELi16ELi16EEvPKaS1_Piiii_param_0,
+.param .u64 _Z29predict_so_int8_ampere_kernelILi16ELi16ELi16EEvPKaS1_Piiii_param_1,
+.param .u64 _Z29predict_so_int8_ampere_kernelILi16ELi16ELi16EEvPKaS1_Piiii_param_2,
+.param .u32 _Z29predict_so_int8_ampere_kernelILi16ELi16ELi16EEvPKaS1_Piiii_param_3,
+.param .u32 _Z29predict_so_int8_ampere_kernelILi16ELi16ELi16EEvPKaS1_Piiii_param_4,
+.param .u32 _Z29predict_so_int8_ampere_kernelILi16ELi16ELi16EEvPKaS1_Piiii_param_5
+)
+{
+.reg .pred %p<6>;
+.reg .b32 %r<87>;
+.reg .b64 %rd<16>;
+
+
+ld.param.u64 %rd5, [_Z29predict_so_int8_ampere_kernelILi16ELi16ELi16EEvPKaS1_Piiii_param_0];
+ld.param.u64 %rd6, [_Z29predict_so_int8_ampere_kernelILi16ELi16ELi16EEvPKaS1_Piiii_param_1];
+ld.param.u64 %rd7, [_Z29predict_so_int8_ampere_kernelILi16ELi16ELi16EEvPKaS1_Piiii_param_2];
+ld.param.u32 %r34, [_Z29predict_so_int8_ampere_kernelILi16ELi16ELi16EEvPKaS1_Piiii_param_3];
+ld.param.u32 %r32, [_Z29predict_so_int8_ampere_kernelILi16ELi16ELi16EEvPKaS1_Piiii_param_4];
+ld.param.u32 %r33, [_Z29predict_so_int8_ampere_kernelILi16ELi16ELi16EEvPKaS1_Piiii_param_5];
+mov.u32 %r35, %ntid.x;
+mov.u32 %r36, %ctaid.x;
+mov.u32 %r37, %tid.x;
+mad.lo.s32 %r38, %r36, %r35, %r37;
+mov.u32 %r39, %ntid.y;
+mov.u32 %r40, %ctaid.y;
+mov.u32 %r41, %tid.y;
+mad.lo.s32 %r42, %r40, %r39, %r41;
+shr.u32 %r43, %r38, 1;
+and.b32 %r1, %r43, 2147483632;
+shl.b32 %r2, %r42, 4;
+setp.ge.s32 %p1, %r1, %r34;
+setp.ge.s32 %p2, %r2, %r33;
+or.pred %p3, %p1, %p2;
+@%p3 bra $L__BB2_5;
+
+setp.lt.s32 %p4, %r32, 1;
+mov.u32 %r79, 0;
+mov.u32 %r80, %r79;
+mov.u32 %r81, %r79;
+mov.u32 %r82, %r79;
+mov.u32 %r83, %r79;
+mov.u32 %r84, %r79;
+mov.u32 %r85, %r79;
+mov.u32 %r86, %r79;
+@%p4 bra $L__BB2_4;
+
+mul.lo.s32 %r62, %r1, %r32;
+cvta.to.global.u64 %rd8, %rd5;
+cvt.s64.s32 %rd9, %r62;
+add.s64 %rd15, %rd8, %rd9;
+shl.b32 %r3, %r33, 4;
+cvta.to.global.u64 %rd2, %rd6;
+mov.u32 %r69, 0;
+mov.u32 %r79, %r69;
+mov.u32 %r80, %r69;
+mov.u32 %r81, %r69;
+mov.u32 %r82, %r69;
+mov.u32 %r83, %r69;
+mov.u32 %r84, %r69;
+mov.u32 %r85, %r69;
+mov.u32 %r86, %r69;
+mov.u32 %r78, %r69;
+
+$L__BB2_3:
+wmma.load.a.sync.aligned.row.m16n16k16.global.s8 {%r63, %r64}, [%rd15], %r32;
+add.s32 %r65, %r69, %r2;
+cvt.s64.s32 %rd10, %r65;
+add.s64 %rd11, %rd2, %rd10;
+wmma.load.b.sync.aligned.col.m16n16k16.global.s8 {%r66, %r67}, [%rd11], %r33;
+wmma.mma.sync.aligned.row.col.m16n16k16.s32.s8.s8.s32 {%r86, %r85, %r84, %r83, %r82, %r81, %r80, %r79}, {%r63, %r64}, {%r66, %r67}, {%r86, %r85, %r84, %r83, %r82, %r81, %r80, %r79};
+add.s64 %rd15, %rd15, 16;
+add.s32 %r69, %r69, %r3;
+add.s32 %r78, %r78, 16;
+setp.lt.s32 %p5, %r78, %r32;
+@%p5 bra $L__BB2_3;
+
+$L__BB2_4:
+mad.lo.s32 %r68, %r1, %r33, %r2;
+cvta.to.global.u64 %rd12, %rd7;
+mul.wide.s32 %rd13, %r68, 4;
+add.s64 %rd14, %rd12, %rd13;
+wmma.store.d.sync.aligned.row.m16n16k16.global.s32 [%rd14], {%r86, %r85, %r84, %r83, %r82, %r81, %r80, %r79}, %r33;
+
+$L__BB2_5:
+ret;
+
+}
+.entry _Z31predict_attn_int8_ampere_kernelILi16ELi16ELi16EEvPKaS1_Piiii(
+.param .u64 _Z31predict_attn_int8_ampere_kernelILi16ELi16ELi16EEvPKaS1_Piiii_param_0,
+.param .u64 _Z31predict_attn_int8_ampere_kernelILi16ELi16ELi16EEvPKaS1_Piiii_param_1,
+.param .u64 _Z31predict_attn_int8_ampere_kernelILi16ELi16ELi16EEvPKaS1_Piiii_param_2,
+.param .u32 _Z31predict_attn_int8_ampere_kernelILi16ELi16ELi16EEvPKaS1_Piiii_param_3,
+.param .u32 _Z31predict_attn_int8_ampere_kernelILi16ELi16ELi16EEvPKaS1_Piiii_param_4,
+.param .u32 _Z31predict_attn_int8_ampere_kernelILi16ELi16ELi16EEvPKaS1_Piiii_param_5
+)
+{
+.reg .pred %p<6>;
+.reg .b32 %r<87>;
+.reg .b64 %rd<16>;
+
+
+ld.param.u64 %rd5, [_Z31predict_attn_int8_ampere_kernelILi16ELi16ELi16EEvPKaS1_Piiii_param_0];
+ld.param.u64 %rd6, [_Z31predict_attn_int8_ampere_kernelILi16ELi16ELi16EEvPKaS1_Piiii_param_1];
+ld.param.u64 %rd7, [_Z31predict_attn_int8_ampere_kernelILi16ELi16ELi16EEvPKaS1_Piiii_param_2];
+ld.param.u32 %r34, [_Z31predict_attn_int8_ampere_kernelILi16ELi16ELi16EEvPKaS1_Piiii_param_3];
+ld.param.u32 %r32, [_Z31predict_attn_int8_ampere_kernelILi16ELi16ELi16EEvPKaS1_Piiii_param_4];
+ld.param.u32 %r33, [_Z31predict_attn_int8_ampere_kernelILi16ELi16ELi16EEvPKaS1_Piiii_param_5];
+mov.u32 %r35, %ntid.x;
+mov.u32 %r36, %ctaid.x;
+mov.u32 %r37, %tid.x;
+mad.lo.s32 %r38, %r36, %r35, %r37;
+mov.u32 %r39, %ntid.y;
+mov.u32 %r40, %ctaid.y;
+mov.u32 %r41, %tid.y;
+mad.lo.s32 %r42, %r40, %r39, %r41;
+shr.u32 %r43, %r38, 1;
+and.b32 %r1, %r43, 2147483632;
+shl.b32 %r2, %r42, 4;
+setp.ge.s32 %p1, %r1, %r34;
+setp.ge.s32 %p2, %r2, %r33;
+or.pred %p3, %p1, %p2;
+@%p3 bra $L__BB3_5;
+
+setp.lt.s32 %p4, %r32, 1;
+mov.u32 %r79, 0;
+mov.u32 %r80, %r79;
+mov.u32 %r81, %r79;
+mov.u32 %r82, %r79;
+mov.u32 %r83, %r79;
+mov.u32 %r84, %r79;
+mov.u32 %r85, %r79;
+mov.u32 %r86, %r79;
+@%p4 bra $L__BB3_4;
+
+mul.lo.s32 %r62, %r1, %r32;
+cvta.to.global.u64 %rd8, %rd5;
+cvt.s64.s32 %rd9, %r62;
+add.s64 %rd15, %rd8, %rd9;
+shl.b32 %r3, %r33, 4;
+cvta.to.global.u64 %rd2, %rd6;
+mov.u32 %r69, 0;
+mov.u32 %r79, %r69;
+mov.u32 %r80, %r69;
+mov.u32 %r81, %r69;
+mov.u32 %r82, %r69;
+mov.u32 %r83, %r69;
+mov.u32 %r84, %r69;
+mov.u32 %r85, %r69;
+mov.u32 %r86, %r69;
+mov.u32 %r78, %r69;
+
+$L__BB3_3:
+wmma.load.a.sync.aligned.row.m16n16k16.global.s8 {%r63, %r64}, [%rd15], %r32;
+add.s32 %r65, %r69, %r2;
+cvt.s64.s32 %rd10, %r65;
+add.s64 %rd11, %rd2, %rd10;
+wmma.load.b.sync.aligned.col.m16n16k16.global.s8 {%r66, %r67}, [%rd11], %r33;
+wmma.mma.sync.aligned.row.col.m16n16k16.s32.s8.s8.s32 {%r86, %r85, %r84, %r83, %r82, %r81, %r80, %r79}, {%r63, %r64}, {%r66, %r67}, {%r86, %r85, %r84, %r83, %r82, %r81, %r80, %r79};
+add.s64 %rd15, %rd15, 16;
+add.s32 %r69, %r69, %r3;
+add.s32 %r78, %r78, 16;
+setp.lt.s32 %p5, %r78, %r32;
+@%p5 bra $L__BB3_3;
+
+$L__BB3_4:
+mad.lo.s32 %r68, %r1, %r33, %r2;
+cvta.to.global.u64 %rd12, %rd7;
+mul.wide.s32 %rd13, %r68, 4;
+add.s64 %rd14, %rd12, %rd13;
+wmma.store.d.sync.aligned.row.m16n16k16.global.s32 [%rd14], {%r86, %r85, %r84, %r83, %r82, %r81, %r80, %r79}, %r33;
+
+$L__BB3_5:
+ret;
+
+}
 

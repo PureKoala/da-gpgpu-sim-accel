@@ -53,64 +53,41 @@ void ms_deform_attn_cuda_backward(
     cudaStream_t stream = 0);
 
 /****************************************************************************************
- * Quantization Parameters for INT8 Tensor Core Prediction Phase
- ****************************************************************************************/
-struct QuantizationParams {
-    float scale;
-    int zero_point;
-    
-    QuantizationParams() : scale(1.0f), zero_point(0) {}
-    QuantizationParams(float s, int zp) : scale(s), zero_point(zp) {}
-};
-
-/****************************************************************************************
- * Prediction Phase APIs: INT8 Tensor Core GEMM for Sampling Offset & Attention Weight
+ * Prediction Phase APIs: FP16 Tensor Core GEMM for Sampling Offset & Attention Weight
+ * Uses native FP16 without quantization for better accuracy and simpler implementation
  ****************************************************************************************/
 
-// Predict sampling offsets using INT8 Tensor Core (Ampere mma.sync instructions)
-// Input: Q [batch×num_query, C_in] (INT8), W_SO [C_in, N_out] (INT8, N-padded)
-// Output: SO [batch×num_query, N_out] (INT32 accumulator)
-// Note: N_out must be multiple of 8 for INT8 Tensor Core (m16n8k16 instruction)
+// Predict sampling offsets using FP16 Tensor Core (Ampere/Turing wmma instructions)
+// Input: Q [batch×num_query, C_in] (FP16), W_SO [C_in, N_out] (FP16)
+// Output: SO [batch×num_query, N_out] (FP32 accumulator)
+// Note: N_out must be multiple of 8 for optimal Tensor Core utilization (m16n8k16 instruction)
 void ms_deform_attn_predict_so_cuda(
-    const int8_t* d_Q,
-    const int8_t* d_W_SO,
-    int32_t* d_SO_out,
+    const half* d_Q,
+    const half* d_W_SO,
+    float* d_SO_out,
     int batch_size,
     int num_query,
     int C_in,
     int N_out,
     cudaStream_t stream = 0);
 
-// Predict attention weights using INT8 Tensor Core
-// Input: Q [batch×num_query, C_in] (INT8), W_A [C_in, N_out] (INT8, N-padded)
-// Output: A [batch×num_query, N_out] (INT32 accumulator)
-// Note: N_out must be multiple of 8 for INT8 Tensor Core (m16n8k16 instruction)
+// Predict attention weights using FP16 Tensor Core
+// Input: Q [batch×num_query, C_in] (FP16), W_A [C_in, N_out] (FP16)
+// Output: A [batch×num_query, N_out] (FP32 accumulator)
+// Note: N_out must be multiple of 8 for optimal Tensor Core utilization (m16n8k16 instruction)
 void ms_deform_attn_predict_attn_cuda(
-    const int8_t* d_Q,
-    const int8_t* d_W_A,
-    int32_t* d_A_out,
+    const half* d_Q,
+    const half* d_W_A,
+    float* d_A_out,
     int batch_size,
     int num_query,
     int C_in,
     int N_out,
     cudaStream_t stream = 0);
 
-// Dequantize INT32 results to FP32 for sampling offsets
-void ms_deform_attn_dequantize_so_cuda(
-    const int32_t* d_SO_int32,
+// Optional: Add reference points to sampling offsets (if needed)
+void ms_deform_attn_add_reference_cuda(
     float* d_sampling_loc,
     const float* d_reference_points,
-    float scale,
-    int zero_point,
-    int total_elements,
-    bool add_reference,
-    cudaStream_t stream = 0);
-
-// Dequantize INT32 results to FP32 for attention weights
-void ms_deform_attn_dequantize_attn_cuda(
-    const int32_t* d_A_int32,
-    float* d_attn_weight,
-    float scale,
-    int zero_point,
     int total_elements,
     cudaStream_t stream = 0);

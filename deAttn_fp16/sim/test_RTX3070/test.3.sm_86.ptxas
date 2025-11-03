@@ -1,0 +1,13 @@
+ptxas info    : 0 bytes gmem
+ptxas info    : Compiling entry function '_Z24predict_attn_fp16_kernelILi16ELi16ELi16EEvPK6__halfS2_Pfiii' for 'sm_86'
+ptxas info    : Function properties for _Z24predict_attn_fp16_kernelILi16ELi16ELi16EEvPK6__halfS2_Pfiii
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 40 registers, 388 bytes cmem[0]
+ptxas info    : Compiling entry function '_Z22predict_so_fp16_kernelILi16ELi16ELi16EEvPK6__halfS2_Pfiii' for 'sm_86'
+ptxas info    : Function properties for _Z22predict_so_fp16_kernelILi16ELi16ELi16EEvPK6__halfS2_Pfiii
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 40 registers, 388 bytes cmem[0]
+ptxas info    : Compiling entry function '_Z20add_reference_kernelPfPKfi' for 'sm_86'
+ptxas info    : Function properties for _Z20add_reference_kernelPfPKfi
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 10 registers, 372 bytes cmem[0]
