@@ -3072,12 +3072,39 @@ __host__ cudaError_t CUDARTAPI cudaEventElapsedTime(float *ms,
   if (g_debug_execution >= 3) {
     announce_call(__my_func__);
   }
-  time_t elapsed_time;
+  
+  // 原始实现（使用wall-clock时间）- 已注释
+  // time_t elapsed_time;
+  // CUevent_st *s = get_event(start);
+  // CUevent_st *e = get_event(end);
+  // if (s == NULL || e == NULL) return g_last_cudaError = cudaErrorUnknown;
+  // elapsed_time = e->clock() - s->clock();
+  // *ms = 1000 * elapsed_time;
+  // return g_last_cudaError = cudaSuccess;
+  
+  // 新实现：使用GPGPU-Sim模拟器的周期数计算时间
   CUevent_st *s = get_event(start);
   CUevent_st *e = get_event(end);
   if (s == NULL || e == NULL) return g_last_cudaError = cudaErrorUnknown;
-  elapsed_time = e->clock() - s->clock();
-  *ms = 1000 * elapsed_time;
+  
+  // 获取两个事件之间的模拟周期数差异
+  double start_cycle = s->get_gpu_cycle();
+  double end_cycle = e->get_gpu_cycle();
+  double elapsed_cycles = end_cycle - start_cycle;
+  
+  // 获取GPU时钟频率（单位：kHz）
+  gpgpu_context *ctx = GPGPU_Context();
+  double clock_freq_khz = ctx->the_gpgpusim->g_the_gpu->shader_clock();
+  
+  // 计算经过的时间（微秒 us）
+  // elapsed_cycles / (clock_freq_khz * 1000) * 1000000 = elapsed_cycles / clock_freq_khz * 1000
+  *ms = (float)(elapsed_cycles / clock_freq_khz * 1000.0);
+  
+  if (g_debug_execution >= 3) {
+    printf("GPGPU-Sim: Event timing - start_cycle=%.0f, end_cycle=%.0f, elapsed_cycles=%.0f, freq=%.2f kHz, time=%.3f us\n",
+           start_cycle, end_cycle, elapsed_cycles, clock_freq_khz, *ms);
+  }
+  
   return g_last_cudaError = cudaSuccess;
 }
 

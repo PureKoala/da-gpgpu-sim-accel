@@ -76,6 +76,13 @@ const char *g_opcode_string[NUM_OPCODES] = {
 unsigned thread_group_offset(int thread, unsigned wmma_type,
                              unsigned wmma_layout, unsigned type, int stride) {
   unsigned offset;
+  
+  // INT8 WMMA: Each element is 1 byte (vs 2 bytes for FP16)
+  // The offset values should be ELEMENT indices, not byte offsets
+  // So INT8 uses the SAME offset tables as FP16 (element-wise addressing)
+  // The byte offset calculation happens later: offset * (size/8)
+  
+  // FP16 WMMA: Original offset tables (m16n16k16.f16) - in ELEMENT indices
   unsigned load_a_row[8] = {0, 128, 0, 128, 64, 192, 64, 192};
   unsigned load_a_col[8] = {0, 8, 0, 8, 4, 12, 4, 12};
   unsigned load_b_row[8] = {0, 8, 0, 8, 4, 12, 4, 12};
@@ -86,9 +93,14 @@ unsigned thread_group_offset(int thread, unsigned wmma_type,
   unsigned load_c_half_col[8] = {0, 8, 128, 136, 4, 12, 132, 140};
   unsigned thread_group = thread / 4;
   unsigned in_tg_index = thread % 4;
+  
+  // Detect if this is INT8 WMMA
+  bool is_int8 = (type == S8_TYPE || type == U8_TYPE);
 
   switch (wmma_type) {
     case LOAD_A:
+      // Use same offset table for both INT8 and FP16
+      // The element indices are the same, byte offset differs due to size/8
       if (wmma_layout == ROW)
         offset = load_a_row[thread_group] + 16 * in_tg_index;
       else
@@ -96,6 +108,7 @@ unsigned thread_group_offset(int thread, unsigned wmma_type,
       break;
 
     case LOAD_B:
+      // Use same offset table for both INT8 and FP16
       if (wmma_layout == ROW)
         offset = load_b_row[thread_group] + 16 * in_tg_index;
       else
@@ -109,7 +122,8 @@ unsigned thread_group_offset(int thread, unsigned wmma_type,
           offset = load_c_half_row[thread_group] + 16 * in_tg_index;
         else
           offset = load_c_half_col[thread_group] + in_tg_index;
-      } else {
+      } else if (type == S32_TYPE || type == F32_TYPE) {
+        // INT32 or FP32 accumulator (used by INT8 WMMA output or FP16 WMMA output)
         if (wmma_layout == ROW)
           offset = load_c_float_row[thread_group];
         else
@@ -139,6 +153,9 @@ unsigned thread_group_offset(int thread, unsigned wmma_type,
           default:
             abort();
         }
+      } else {
+        printf("thread_group_offset: unsupported type=%u for LOAD_C/STORE_D\n", type);
+        abort();
       }
       break;
 
@@ -1914,6 +1931,12 @@ void mma_impl(const ptx_instruction *pI, core_t *core, warp_inst_t inst) {
   unsigned b_layout = pI->get_wmma_layout(1);
   unsigned type = pI->get_type();
   unsigned type2 = pI->get_type2();
+  
+  // Check if this is an INT8 WMMA instruction (4 type parameters)
+  // For INT8: m16n16k16.s32.s8.s8.s32, type2 should be s32 (accumulator)
+  // For FP16: m16n16k16.f16.f16, type2 is the second type
+  bool is_int8_wmma = (pI->get_scalar_type().size() == 4);
+  
   int tid;
   const operand_info &dst = pI->operand_lookup(0);
 
@@ -1926,15 +1949,28 @@ void mma_impl(const ptx_instruction *pI, core_t *core, warp_inst_t inst) {
 
   for (thrd = 0; thrd < core->get_warp_size(); thrd++) {
     thread = core->get_thread_info()[tid + thrd];
+    
     if (core->get_gpu()->gpgpu_ctx->debug_tensorcore)
       printf("THREAD=%d\n:", thrd);
     for (int operand_num = 1; operand_num <= 3; operand_num++) {
       const operand_info &src_a = pI->operand_lookup(operand_num);
       unsigned nelem = src_a.get_vect_nelem();
+      
+      // For INT8 WMMA: operand 1&2 have 2 elements, operand 3 has 8 elements
+      // For FP16 WMMA: all operands have 4 or 8 elements
+      if (is_int8_wmma && operand_num <= 2 && nelem != 2) {
+        // Skip processing if INT8 WMMA input operands don't have expected 2 elements
+        // This is a safety check - INT8 WMMA uses 2 registers for A/B inputs
+        if (core->get_gpu()->gpgpu_ctx->debug_tensorcore)
+          printf("INT8 WMMA: operand %d has %d elements (expected 2)\n", operand_num, nelem);
+        continue;
+      }
+      
       ptx_reg_t v[8];
       thread->get_vector_operand_values(src_a, v, nelem);
+
       if (core->get_gpu()->gpgpu_ctx->debug_tensorcore) {
-        printf("Thread%d_Iteration=%d\n:", thrd, operand_num);
+        printf("Thread%d_Iteration=%d (nelem=%d)\n:", thrd, operand_num, nelem);
         for (k = 0; k < nelem; k++) {
           printf("%llx ", v[k].u64);
         }
@@ -1943,59 +1979,124 @@ void mma_impl(const ptx_instruction *pI, core_t *core, warp_inst_t inst) {
       ptx_reg_t nw_v[16];
       int hex_val;
 
-      if (!((operand_num == 3) && (type2 == F32_TYPE))) {
-        for (k = 0; k < 2 * nelem; k++) {
-          if (k % 2 == 1)
-            hex_val = (v[k / 2].s64 & 0xffff);
-          else
-            hex_val = ((v[k / 2].s64 & 0xffff0000) >> 16);
-          nw_v[k].f16 = *(reinterpret_cast<half *>(hex_val));
+      // Unpack register values based on data type
+      if (!((operand_num == 3) && (type2 == F32_TYPE || type2 == S32_TYPE))) {
+        if (is_int8_wmma && operand_num <= 2) {
+          // INT8 WMMA: Unpack 4 INT8 values from each 32-bit register
+          // For A/B operands: 2 registers × 4 INT8 = 8 INT8 values total
+          for (k = 0; k < nelem; k++) {
+            // Each register contains 4 INT8 values in bytes 0-3
+            nw_v[k * 4 + 0].s32 = (v[k].s64 & 0xff);
+            nw_v[k * 4 + 1].s32 = ((v[k].s64 >> 8) & 0xff);
+            nw_v[k * 4 + 2].s32 = ((v[k].s64 >> 16) & 0xff);
+            nw_v[k * 4 + 3].s32 = ((v[k].s64 >> 24) & 0xff);
+            
+            // Sign extend if s8 (not u8)
+            if (type == S8_TYPE) {
+              if (nw_v[k * 4 + 0].s32 & 0x80) nw_v[k * 4 + 0].s32 |= 0xffffff00;
+              if (nw_v[k * 4 + 1].s32 & 0x80) nw_v[k * 4 + 1].s32 |= 0xffffff00;
+              if (nw_v[k * 4 + 2].s32 & 0x80) nw_v[k * 4 + 2].s32 |= 0xffffff00;
+              if (nw_v[k * 4 + 3].s32 & 0x80) nw_v[k * 4 + 3].s32 |= 0xffffff00;
+            }
+          }
+          if (core->get_gpu()->gpgpu_ctx->debug_tensorcore) {
+            printf("INT8 unpacked:");
+            for (k = 0; k < nelem * 4; k++) {
+              printf("%d ", nw_v[k].s32);
+            }
+            printf("\n");
+          }
+        } else {
+          // FP16 WMMA: Unpack 2 FP16 values from each 32-bit register
+          for (k = 0; k < 2 * nelem; k++) {
+            if (k % 2 == 1)
+              hex_val = (v[k / 2].s64 & 0xffff);
+            else
+              hex_val = ((v[k / 2].s64 & 0xffff0000) >> 16);
+            nw_v[k].f16 = *(reinterpret_cast<half *>(&hex_val));
+          }
         }
       }
-      if (!((operand_num == 3) && (type2 == F32_TYPE))) {
-        for (k = 0; k < 2 * nelem; k++) {
-          temp = nw_v[k].f16;
-          if (core->get_gpu()->gpgpu_ctx->debug_tensorcore)
-            printf("%.2f ", temp);
+      if (!((operand_num == 3) && (type2 == F32_TYPE || type2 == S32_TYPE))) {
+        if (is_int8_wmma && operand_num <= 2) {
+          // INT8: Print integer values
+          for (k = 0; k < nelem * 4; k++) {
+            if (core->get_gpu()->gpgpu_ctx->debug_tensorcore)
+              printf("%d ", nw_v[k].s32);
+          }
+        } else {
+          // FP16: Print float values
+          for (k = 0; k < 2 * nelem; k++) {
+            temp = nw_v[k].f16;
+            if (core->get_gpu()->gpgpu_ctx->debug_tensorcore)
+              printf("%.2f ", temp);
+          }
         }
         if (core->get_gpu()->gpgpu_ctx->debug_tensorcore) printf("\n");
       } else {
         if (core->get_gpu()->gpgpu_ctx->debug_tensorcore) {
-          for (k = 0; k < 8; k++) {
-            printf("%.2f ", v[k].f32);
+          for (k = 0; k < nelem; k++) {
+            if (type2 == S32_TYPE)
+              printf("%d ", v[k].s32);
+            else
+              printf("%.2f ", v[k].f32);
           }
           printf("\n");
         }
       }
+      
+      // Use actual nelem instead of hardcoded 8 for flexibility
+      // For INT8 WMMA: operand 1&2 have nelem=2, operand 3 has nelem=8
+      // For FP16 WMMA: operand 1&2 have nelem=4 or 8, operand 3 has nelem=4 or 8
+      unsigned loop_count;
+      if (operand_num == 3) {
+        loop_count = nelem;  // Use actual nelem for accumulator
+      } else {
+        // For A/B operands: INT8 uses nelem*4 (2*4=8), FP16 uses nelem*2 (4*2=8 or 8*2=16)
+        if (is_int8_wmma) {
+          loop_count = nelem * 4;  // INT8: 2 regs * 4 elements = 8 total
+        } else {
+          loop_count = nelem * 2;  // FP16: 4 regs * 2 elements = 8 total (or 8*2=16)
+        }
+      }
+      
       switch (operand_num) {
         case 1:  // operand 1
-          for (k = 0; k < 8; k++) {
-            mapping(thrd, LOAD_A, a_layout, F16_TYPE, k, 16, row, col, offset);
+          for (k = 0; k < loop_count; k++) {
+            // Use correct type for mapping: INT8 for INT8 WMMA, F16 for FP16 WMMA
+            unsigned mapping_type = is_int8_wmma ? type : F16_TYPE;
+            mapping(thrd, LOAD_A, a_layout, mapping_type, k, 16, row, col, offset);
             if (core->get_gpu()->gpgpu_ctx->debug_tensorcore)
-              printf("A:thread=%d,row=%d,col=%d,offset=%d\n", thrd, row, col,
-                     offset);
-            matrix_a[row][col] = nw_v[offset];
+              printf("A:thread=%d,row=%d,col=%d,offset=%d,k=%d,loop_count=%d\n", thrd, row, col,
+                     offset, k, loop_count);
+            if (row < 16 && col < 16 && offset < (is_int8_wmma ? nelem * 4 : 16))
+              matrix_a[row][col] = nw_v[offset];
           }
           break;
         case 2:  // operand 2
-          for (k = 0; k < 8; k++) {
-            mapping(thrd, LOAD_B, b_layout, F16_TYPE, k, 16, row, col, offset);
+          for (k = 0; k < loop_count; k++) {
+            // Use correct type for mapping: INT8 for INT8 WMMA, F16 for FP16 WMMA
+            unsigned mapping_type = is_int8_wmma ? type : F16_TYPE;
+            mapping(thrd, LOAD_B, b_layout, mapping_type, k, 16, row, col, offset);
             if (core->get_gpu()->gpgpu_ctx->debug_tensorcore)
-              printf("B:thread=%d,row=%d,col=%d,offset=%d\n", thrd, row, col,
-                     offset);
-            matrix_b[row][col] = nw_v[offset];
+              printf("B:thread=%d,row=%d,col=%d,offset=%d,k=%d,loop_count=%d\n", thrd, row, col,
+                     offset, k, loop_count);
+            if (row < 16 && col < 16 && offset < (is_int8_wmma ? nelem * 4 : 16))
+              matrix_b[row][col] = nw_v[offset];
           }
           break;
         case 3:  // operand 3
-          for (k = 0; k < 8; k++) {
+          for (k = 0; k < loop_count; k++) {
             mapping(thrd, LOAD_C, ROW, type2, k, 16, row, col, offset);
             if (core->get_gpu()->gpgpu_ctx->debug_tensorcore)
-              printf("C:thread=%d,row=%d,col=%d,offset=%d\n", thrd, row, col,
-                     offset);
-            if (type2 != F16_TYPE) {
-              matrix_c[row][col] = v[offset];
-            } else {
-              matrix_c[row][col] = nw_v[offset];
+              printf("C:thread=%d,row=%d,col=%d,offset=%d,k=%d,loop_count=%d\n", thrd, row, col,
+                     offset, k, loop_count);
+            if (row < 16 && col < 16 && offset < nelem) {
+              if (type2 != F16_TYPE) {
+                matrix_c[row][col] = v[offset];
+              } else {
+                matrix_c[row][col] = nw_v[offset];
+              }
             }
           }
           break;
@@ -2040,34 +2141,55 @@ void mma_impl(const ptx_instruction *pI, core_t *core, warp_inst_t inst) {
     }
   }
 
-  for (i = 0; i < 16; i++) {
-    for (j = 0; j < 16; j++) {
-      for (k = 0; k < 16; k++) {
-        matrix_d[i][j].f16 =
-            matrix_d[i][j].f16 + matrix_a[i][k].f16 * matrix_b[k][j].f16;
+  // Perform matrix multiplication: D = A * B + C
+  if (is_int8_wmma) {
+    // INT8 WMMA: Integer matrix multiplication
+    // A, B contain INT8 values (stored as s32)
+    // C, D contain INT32 values (s32)
+    for (i = 0; i < 16; i++) {
+      for (j = 0; j < 16; j++) {
+        // Initialize D[i][j] with accumulator C[i][j]
+        matrix_d[i][j].s32 = matrix_c[i][j].s32;
+        // Compute dot product: D[i][j] += sum(A[i][k] * B[k][j])
+        for (k = 0; k < 16; k++) {
+          matrix_d[i][j].s32 += matrix_a[i][k].s32 * matrix_b[k][j].s32;
+        }
       }
-      if ((type == F16_TYPE) && (type2 == F16_TYPE))
-        matrix_d[i][j].f16 += matrix_c[i][j].f16;
-      else if ((type == F32_TYPE) && (type2 == F16_TYPE)) {
-        temp2 = matrix_d[i][j].f16 + matrix_c[i][j].f16;
-        temp = temp2;
-        matrix_d[i][j].f32 = temp;
-      } else if ((type == F16_TYPE) && (type2 == F32_TYPE)) {
-        temp = matrix_d[i][j].f16;
-        temp += matrix_c[i][j].f32;
-        matrix_d[i][j].f16 = half(temp);
-      } else {
-        temp = matrix_d[i][j].f16;
-        temp += matrix_c[i][j].f32;
-        matrix_d[i][j].f32 = temp;
+    }
+  } else {
+    // FP16 WMMA: Floating-point matrix multiplication
+    for (i = 0; i < 16; i++) {
+      for (j = 0; j < 16; j++) {
+        for (k = 0; k < 16; k++) {
+          matrix_d[i][j].f16 =
+              matrix_d[i][j].f16 + matrix_a[i][k].f16 * matrix_b[k][j].f16;
+        }
+        if ((type == F16_TYPE) && (type2 == F16_TYPE))
+          matrix_d[i][j].f16 += matrix_c[i][j].f16;
+        else if ((type == F32_TYPE) && (type2 == F16_TYPE)) {
+          temp2 = matrix_d[i][j].f16 + matrix_c[i][j].f16;
+          temp = temp2;
+          matrix_d[i][j].f32 = temp;
+        } else if ((type == F16_TYPE) && (type2 == F32_TYPE)) {
+          temp = matrix_d[i][j].f16;
+          temp += matrix_c[i][j].f32;
+          matrix_d[i][j].f16 = half(temp);
+        } else {
+          temp = matrix_d[i][j].f16;
+          temp += matrix_c[i][j].f32;
+          matrix_d[i][j].f32 = temp;
+        }
       }
     }
   }
+  
   if (core->get_gpu()->gpgpu_ctx->debug_tensorcore) {
     printf("MATRIX_D\n");
     for (i = 0; i < 16; i++) {
       for (j = 0; j < 16; j++) {
-        if (type == F16_TYPE) {
+        if (is_int8_wmma) {
+          printf("%d ", matrix_d[i][j].s32);
+        } else if (type == F16_TYPE) {
           temp = matrix_d[i][j].f16;
           printf("%.2f ", temp);
         } else
@@ -2076,17 +2198,34 @@ void mma_impl(const ptx_instruction *pI, core_t *core, warp_inst_t inst) {
       printf("\n");
     }
   }
+  
   for (thrd = 0; thrd < core->get_warp_size(); thrd++) {
     int row_t[8];
     int col_t[8];
     for (k = 0; k < 8; k++) {
-      mapping(thrd, LOAD_C, ROW, type, k, 16, row_t[k], col_t[k], offset);
+      // Use type2 (output type) instead of type (input type) for mapping
+      mapping(thrd, LOAD_C, ROW, type2, k, 16, row_t[k], col_t[k], offset);
       if (core->get_gpu()->gpgpu_ctx->debug_tensorcore)
         printf("mma:store:row:%d,col%d\n", row_t[k], col_t[k]);
     }
     thread = core->get_thread_info()[tid + thrd];
 
-    if (type == F32_TYPE) {
+    if (is_int8_wmma) {
+      // INT8 WMMA: Write back INT32 results
+      thread->set_wmma_vector_operand_values(
+          dst, matrix_d[row_t[0]][col_t[0]], matrix_d[row_t[1]][col_t[1]],
+          matrix_d[row_t[2]][col_t[2]], matrix_d[row_t[3]][col_t[3]],
+          matrix_d[row_t[4]][col_t[4]], matrix_d[row_t[5]][col_t[5]],
+          matrix_d[row_t[6]][col_t[6]], matrix_d[row_t[7]][col_t[7]]);
+      
+      if (core->get_gpu()->gpgpu_ctx->debug_tensorcore) {
+        printf("thread%d:", thrd);
+        for (k = 0; k < 8; k++) {
+          printf("%d ", matrix_d[row_t[k]][col_t[k]].s32);
+        }
+        printf("\n");
+      }
+    } else if (type == F32_TYPE || type2 == F32_TYPE) {
       thread->set_wmma_vector_operand_values(
           dst, matrix_d[row_t[0]][col_t[0]], matrix_d[row_t[1]][col_t[1]],
           matrix_d[row_t[2]][col_t[2]], matrix_d[row_t[3]][col_t[3]],
@@ -3553,6 +3692,7 @@ void mma_ld_impl(const ptx_instruction *pI, core_t *core, warp_inst_t &inst) {
   unsigned type = pI->get_type();
   unsigned wmma_type = pI->get_wmma_type();
   unsigned wmma_layout = pI->get_wmma_layout(0);
+  
   int tid;
   int thrd, stride;
   ptx_thread_info *thread;
@@ -3596,16 +3736,39 @@ void mma_ld_impl(const ptx_instruction *pI, core_t *core, warp_inst_t &inst) {
     addr_t fetch_addr;
     new_addr_type mem_txn_addr[MAX_ACCESSES_PER_INSN_PER_THREAD];
     int num_mem_txn = 0;
+    
+    // Determine the number of elements to read based on destination register count
+    // INT8 WMMA: dst has 2 registers, so we read 4 elements (2 per register)
+    // FP16 WMMA: dst has 4 or 8 registers, so we read 8 or 16 elements
+    unsigned dst_nelem = dst.get_vect_nelem();
+    int num_elements_to_read = 16;  // default for FP16
+    
+    // Element stride in memory (bytes between consecutive elements)
+    // For INT8: size=8 bits, so size/8=1 byte per element
+    // For FP16: size=16 bits, so size/8=2 bytes per element
+    int element_stride = (type == S8_TYPE || type == U8_TYPE) ? 1 : 2;
+    
+    if (wmma_type == LOAD_A || wmma_type == LOAD_B) {
+      // For INT8: 2 registers (.v2) -> read 8 elements (4 INT8 per register)
+      // For FP16: 8 half-registers (.v8) -> read 16 elements (2 FP16 per full register)
+      if (dst_nelem == 2) {
+        num_elements_to_read = 8;  // INT8 case: 8 INT8 values = 8 bytes = 2 × 32-bit regs
+      } else {
+        num_elements_to_read = 16;  // FP16 case
+      }
+    } else if (wmma_type == LOAD_C) {
+      num_elements_to_read = 8;  // Both INT8 and FP16 use 8 for accumulator
+    }
 
     if (wmma_type == LOAD_A) {
-      for (i = 0; i < 16; i++) {
+      for (i = 0; i < num_elements_to_read; i++) {
         if (wmma_layout == ROW) {
-          // mem->read(new_addr+2*i,size/8,&data[i].s64);
-          fetch_addr = new_addr + 2 * i;
+          // Row-major: consecutive elements in memory
+          fetch_addr = new_addr + element_stride * i;
           mem->read(fetch_addr, size / 8, &data[i].s64);
         } else if (wmma_layout == COL) {
-          // mem->read(new_addr+2*(i%4)+2*stride*4*(i/4),size/8,&data[i].s64);
-          fetch_addr = new_addr + 2 * (i % 4) + 2 * stride * 4 * (i / 4);
+          // Column-major: elements separated by stride
+          fetch_addr = new_addr + element_stride * (i % 4) + element_stride * stride * 4 * (i / 4);
           mem->read(fetch_addr, size / 8, &data[i].s64);
         } else {
           printf("mma_ld:wrong_layout_type\n");
@@ -3614,14 +3777,14 @@ void mma_ld_impl(const ptx_instruction *pI, core_t *core, warp_inst_t &inst) {
         if (i % 2 == 0) mem_txn_addr[num_mem_txn++] = fetch_addr;
       }
     } else if (wmma_type == LOAD_B) {
-      for (i = 0; i < 16; i++) {
+      for (i = 0; i < num_elements_to_read; i++) {
         if (wmma_layout == COL) {
-          // mem->read(new_addr+2*i,size/8,&data[i].s64);
-          fetch_addr = new_addr + 2 * i;
+          // Column-major: consecutive elements in memory
+          fetch_addr = new_addr + element_stride * i;
           mem->read(fetch_addr, size / 8, &data[i].s64);
         } else if (wmma_layout == ROW) {
-          // mem->read(new_addr+2*(i%4)+2*stride*4*(i/4),size/8,&data[i].s64);
-          fetch_addr = new_addr + 2 * (i % 4) + 2 * stride * 4 * (i / 4);
+          // Row-major: elements separated by stride
+          fetch_addr = new_addr + element_stride * (i % 4) + element_stride * stride * 4 * (i / 4);
           mem->read(fetch_addr, size / 8, &data[i].s64);
         } else {
           printf("mma_ld:wrong_layout_type\n");
@@ -3646,13 +3809,14 @@ void mma_ld_impl(const ptx_instruction *pI, core_t *core, warp_inst_t &inst) {
             printf("mma_ld:wrong_type\n");
             abort();
           }
-        } else if (type == F32_TYPE) {
+        } else if (type == F32_TYPE || type == S32_TYPE) {
+          // F32 or S32 (INT8 WMMA uses S32 accumulator)
           // mem->read(new_addr+4*acc_float_offset(i,wmma_layout,stride),size/8,&data[i].s64);
           fetch_addr = new_addr + 4 * acc_float_offset(i, wmma_layout, stride);
           mem->read(fetch_addr, size / 8, &data[i].s64);
           mem_txn_addr[num_mem_txn++] = fetch_addr;
         } else {
-          printf("wrong type");
+          printf("mma_ld: unsupported type=%u for LOAD_C\n", type);
           abort();
         }
       }
@@ -3702,32 +3866,91 @@ void mma_ld_impl(const ptx_instruction *pI, core_t *core, warp_inst_t &inst) {
       }
     }
 
-    if ((wmma_type == LOAD_C) && (type == F32_TYPE)) {
+    if ((wmma_type == LOAD_C) && (type == F32_TYPE || type == S32_TYPE)) {
       thread->set_wmma_vector_operand_values(dst, data[0], data[1], data[2],
                                              data[3], data[4], data[5], data[6],
                                              data[7]);
     } else {
       ptx_reg_t nw_data[8];
       int num_reg;
-
-      if (wmma_type == LOAD_C)
-        num_reg = 4;
-      else
-        num_reg = 8;
-
-      for (i = 0; i < num_reg; i++) {
-        nw_data[i].s64 = ((data[2 * i].s64 & 0xffff) << 16) |
-                         ((data[2 * i + 1].s64 & 0xffff));
+      
+      // Determine number of registers based on actual destination operand size
+      // INT8 WMMA (s8): LOAD_A/B use 2 registers, LOAD_C uses 8 registers
+      // FP16 WMMA (f16): LOAD_A/B use 8 registers (4 packed), LOAD_C uses 4 registers
+      unsigned dst_nelem = dst.get_vect_nelem();
+      
+      if (wmma_type == LOAD_C) {
+        num_reg = (type == F16_TYPE) ? 4 : dst_nelem;
+      } else {
+        // For LOAD_A and LOAD_B
+        num_reg = (dst_nelem == 2) ? 2 : 8;  // INT8 uses 2, FP16 uses 8
       }
 
-      if (wmma_type == LOAD_C)
-        thread->set_vector_operand_values(dst, nw_data[0], nw_data[1],
-                                          nw_data[2], nw_data[3]);
-      else
-        thread->set_wmma_vector_operand_values(
-            dst, nw_data[0], nw_data[1], nw_data[2], nw_data[3], nw_data[4],
-            nw_data[5], nw_data[6], nw_data[7]);
-      if (core->get_gpu()->gpgpu_ctx->debug_tensorcore) {
+      // Data packing: different for INT8 vs FP16
+      bool is_int8 = (type == S8_TYPE || type == U8_TYPE);
+      
+      if (is_int8 && (wmma_type == LOAD_A || wmma_type == LOAD_B)) {
+        // INT8 WMMA: Pack 4 INT8 values (1 byte each) into one 32-bit register
+        // Each thread loads 8 INT8 values, pack into 2 registers
+        // data[0..7] contain individual INT8 values (in lowest byte of each s64)
+        
+        // Initialize registers to zero first
+        for (i = 0; i < 2; i++) {
+          nw_data[i].u64 = 0;
+        }
+        
+        // Pack data into registers
+        for (i = 0; i < num_reg && i < 2; i++) {
+          int start_idx = 4 * i;
+          int end_idx = 4 * i + 3;
+          
+          if (end_idx >= num_elements_to_read) {
+            break;  // Stop packing if we don't have enough data
+          }
+          
+          // Pack 4 INT8 values into one 32-bit register
+          nw_data[i].u64 = (data[start_idx].u64 & 0xff) |
+                           ((data[start_idx + 1].u64 & 0xff) << 8) |
+                           ((data[start_idx + 2].u64 & 0xff) << 16) |
+                           ((data[start_idx + 3].u64 & 0xff) << 24);
+        }
+      } else {
+        // FP16 WMMA: Pack 2 FP16 values (2 bytes each) into one 32-bit register
+        for (i = 0; i < num_reg && i < 8; i++) {
+          nw_data[i].s64 = ((data[2 * i].s64 & 0xffff) << 16) |
+                           ((data[2 * i + 1].s64 & 0xffff));
+        }
+      }
+
+      // Set registers based on actual number needed
+      if (wmma_type == LOAD_C) {
+        if (num_reg == 4)
+          thread->set_vector_operand_values(dst, nw_data[0], nw_data[1],
+                                            nw_data[2], nw_data[3]);
+        else
+          thread->set_wmma_vector_operand_values(
+              dst, nw_data[0], nw_data[1], nw_data[2], nw_data[3], nw_data[4],
+              nw_data[5], nw_data[6], nw_data[7]);
+      } else {
+        // LOAD_A or LOAD_B
+        if (num_reg == 2) {
+          // INT8 WMMA: only set 2 registers
+          ptx_reg_t reg0, reg1, zero_data;
+          reg0.u32 = nw_data[0];
+          reg1.u32 = nw_data[1];
+          zero_data.u64 = 0;
+          
+          thread->set_vector_operand_values(dst, reg0, reg1, zero_data, zero_data);
+        } else {
+          // FP16 WMMA: set 8 registers
+          thread->set_wmma_vector_operand_values(
+              dst, nw_data[0], nw_data[1], nw_data[2], nw_data[3], nw_data[4],
+              nw_data[5], nw_data[6], nw_data[7]);
+        }
+      }
+      
+      // Print detailed register data only for FP16 WMMA to avoid accessing uninitialized memory in INT8 case
+      if (core->get_gpu()->gpgpu_ctx->debug_tensorcore && !is_int8) {
         printf(
             "mma_ld:data[0].s64=%llx,data[1].s64=%llx,new_data[0].s64=%llx\n",
             data[0].u64, data[1].u64, nw_data[0].u64);

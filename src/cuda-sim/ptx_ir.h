@@ -1052,7 +1052,29 @@ class ptx_instruction : public warp_inst_t {
   }
 
   int get_type2() const {
-    assert(m_scalar_type.size() == 2);
+    // Support both 2-type (FP16 WMMA) and 4-type (INT8 WMMA) instructions
+    assert(m_scalar_type.size() >= 2);
+    if (m_scalar_type.size() == 2) {
+      return m_scalar_type.back();
+    } else if (m_scalar_type.size() == 4) {
+      // For INT8 WMMA: m16n16k16.s32.s8.s8.s32
+      // Return the first s32 (accumulator output type)
+      return m_scalar_type.front();
+    }
+    return m_scalar_type.back();
+  }
+
+  int get_type3() const {
+    // For 4-type instructions (INT8 WMMA), return the 3rd type
+    assert(m_scalar_type.size() >= 3);
+    auto it = m_scalar_type.begin();
+    std::advance(it, 2);
+    return *it;
+  }
+
+  int get_type4() const {
+    // For 4-type instructions (INT8 WMMA), return the 4th type
+    assert(m_scalar_type.size() >= 4);
     return m_scalar_type.back();
   }
 
