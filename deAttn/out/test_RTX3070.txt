@@ -239,7 +239,7 @@ GPGPU-Sim: Configuration options:
 DRAM Timing Options:
 nbk                                    16 # number of banks
 CCD                                     4 # column to column delay
-RRD                                e172454072eab79f6a81a20666d067f2  /home/koala/gpgpu-sim_distribution/deAttn/bin/test
+RRD                                b4e82cc77b051d60b840ea597fce82cf  /home/koala/gpgpu-sim_distribution/deAttn/bin/test
 Extracting PTX file and ptxas options    1: test.1.sm_86.ptx -arch=sm_86
 Extracting PTX file and ptxas options    2: test.2.sm_86.ptx -arch=sm_86
 Extracting PTX file and ptxas options    3: test.3.sm_86.ptx -arch=sm_86
@@ -645,7 +645,7 @@ GPGPU-Sim PTX: __cudaRegisterFunction _Z20dequantize_so_kernelPKiPfPKffiib : hos
 [DEBUG] 量化Q到INT8
 [DEBUG] 量化W_SO到INT8
 [DEBUG] 量化W_A到INT8
-预测阶段数据准备完成 (量化时间: 7.442 ms)
+预测阶段数据准备完成 (量化时间: 7.349 ms)
   Q维度: [256 × 256] → INT8
   W_SO维度: [256 × 256] → INT8 (填充后)
   W_A维度: [256 × 128] → INT8 (填充后)
@@ -681,12 +681,12 @@ H2D传输完成 (0.000 us)
   [1/3] 预测采样偏移量 (实际N=256, 填充到N=256, 浪费0.0%)...
 [DEBUG] 调用 ms_deform_attn_predict_so_cuda
 event update
-GPGPU-Sim PTX: Setting up arguments for 8 bytes starting at 0x7fff59383d70..
-GPGPU-Sim PTX: Setting up arguments for 8 bytes starting at 0x7fff59383d68..
-GPGPU-Sim PTX: Setting up arguments for 8 bytes starting at 0x7fff59383d60..
-GPGPU-Sim PTX: Setting up arguments for 4 bytes starting at 0x7fff59383ce4..
-GPGPU-Sim PTX: Setting up arguments for 4 bytes starting at 0x7fff59383ce0..
-GPGPU-Sim PTX: Setting up arguments for 4 bytes starting at 0x7fff59383cdc..
+GPGPU-Sim PTX: Setting up arguments for 8 bytes starting at 0x7fff96b6bb50..
+GPGPU-Sim PTX: Setting up arguments for 8 bytes starting at 0x7fff96b6bb48..
+GPGPU-Sim PTX: Setting up arguments for 8 bytes starting at 0x7fff96b6bb40..
+GPGPU-Sim PTX: Setting up arguments for 4 bytes starting at 0x7fff96b6bac4..
+GPGPU-Sim PTX: Setting up arguments for 4 bytes starting at 0x7fff96b6bac0..
+GPGPU-Sim PTX: Setting up arguments for 4 bytes starting at 0x7fff96b6babc..
 
 GPGPU-Sim PTX: cudaLaunch for 0x0x407de0 (mode=performance simulation) on stream 0
 GPGPU-Sim PTX: finding reconvergence points for '_Z29predict_so_int8_ampere_kernelILi16ELi16ELi16EEvPKaS1_Piiii'...
@@ -2386,12 +2386,12 @@ GPGPU-Sim API: cudaEventSynchronize ** event detected
   [2/3] 预测注意力权重 (实际N=128, 填充到N=128, 浪费0.0%)...
 [DEBUG] 调用 ms_deform_attn_predict_attn_cuda
 event update
-GPGPU-Sim PTX: Setting up arguments for 8 bytes starting at 0x7fff59383d70..
-GPGPU-Sim PTX: Setting up arguments for 8 bytes starting at 0x7fff59383d68..
-GPGPU-Sim PTX: Setting up arguments for 8 bytes starting at 0x7fff59383d60..
-GPGPU-Sim PTX: Setting up arguments for 4 bytes starting at 0x7fff59383ce4..
-GPGPU-Sim PTX: Setting up arguments for 4 bytes starting at 0x7fff59383ce0..
-GPGPU-Sim PTX: Setting up arguments for 4 bytes starting at 0x7fff59383cdc..
+GPGPU-Sim PTX: Setting up arguments for 8 bytes starting at 0x7fff96b6bb50..
+GPGPU-Sim PTX: Setting up arguments for 8 bytes starting at 0x7fff96b6bb48..
+GPGPU-Sim PTX: Setting up arguments for 8 bytes starting at 0x7fff96b6bb40..
+GPGPU-Sim PTX: Setting up arguments for 4 bytes starting at 0x7fff96b6bac4..
+GPGPU-Sim PTX: Setting up arguments for 4 bytes starting at 0x7fff96b6bac0..
+GPGPU-Sim PTX: Setting up arguments for 4 bytes starting at 0x7fff96b6babc..
 
 GPGPU-Sim PTX: cudaLaunch for 0x0x407e28 (mode=performance simulation) on stream 0
 GPGPU-Sim PTX: finding reconvergence points for '_Z31predict_attn_int8_ampere_kernelILi16ELi16ELi16EEvPKaS1_Piiii'...
@@ -2461,7 +2461,7 @@ GPGPU-Sim uArch: Shader 25 bind to kernel 2 '_Z31predict_attn_int8_ampere_kernel
 Destroy streams for kernel 2: size 0
 kernel_name = _Z31predict_attn_int8_ampere_kernelILi16ELi16ELi16EEvPKaS1_Piiii 
 kernel_launch_uid = 2 
-kernel_stream_id = 128855051578432
+kernel_stream_id = 137025421552704
 gpu_sim_cycle = 10548
 gpu_sim_insn = 958464
 gpu_ipc =      90.8669
@@ -4091,13 +4091,13 @@ GPGPU-Sim API: cudaEventSynchronize ** event detected
   [3/3] 反量化 INT32 → FP32...
 [DEBUG] 调用 ms_deform_attn_dequantize_so_cuda
 event update
-GPGPU-Sim PTX: Setting up arguments for 8 bytes starting at 0x7fff59383dc0..
-GPGPU-Sim PTX: Setting up arguments for 8 bytes starting at 0x7fff59383db8..
-GPGPU-Sim PTX: Setting up arguments for 8 bytes starting at 0x7fff59383db0..
-GPGPU-Sim PTX: Setting up arguments for 4 bytes starting at 0x7fff59383d24..
-GPGPU-Sim PTX: Setting up arguments for 4 bytes starting at 0x7fff59383d20..
-GPGPU-Sim PTX: Setting up arguments for 4 bytes starting at 0x7fff59383d1c..
-GPGPU-Sim PTX: Setting up arguments for 1 bytes starting at 0x7fff59383d18..
+GPGPU-Sim PTX: Setting up arguments for 8 bytes starting at 0x7fff96b6bba0..
+GPGPU-Sim PTX: Setting up arguments for 8 bytes starting at 0x7fff96b6bb98..
+GPGPU-Sim PTX: Setting up arguments for 8 bytes starting at 0x7fff96b6bb90..
+GPGPU-Sim PTX: Setting up arguments for 4 bytes starting at 0x7fff96b6bb04..
+GPGPU-Sim PTX: Setting up arguments for 4 bytes starting at 0x7fff96b6bb00..
+GPGPU-Sim PTX: Setting up arguments for 4 bytes starting at 0x7fff96b6bafc..
+GPGPU-Sim PTX: Setting up arguments for 1 bytes starting at 0x7fff96b6baf8..
 
 GPGPU-Sim PTX: cudaLaunch for 0x0x407685 (mode=performance simulation) on stream 0
 GPGPU-Sim PTX: finding reconvergence points for '_Z20dequantize_so_kernelPKiPfPKffiib'...
@@ -4165,7 +4165,7 @@ GPGPU-Sim uArch: Shader 15 bind to kernel 3 '_Z20dequantize_so_kernelPKiPfPKffii
 Destroy streams for kernel 3: size 0
 kernel_name = _Z20dequantize_so_kernelPKiPfPKffiib 
 kernel_launch_uid = 3 
-kernel_stream_id = 128855051869520
+kernel_stream_id = 137025421843792
 gpu_sim_cycle = 6985
 gpu_sim_insn = 1769472
 gpu_ipc =     253.3246
@@ -5796,11 +5796,11 @@ gpgpu_simulation_rate = 290304 (inst/sec)
 gpgpu_simulation_rate = 1781 (cycle/sec)
 gpgpu_silicon_slowdown = 635597x
 [DEBUG] 调用 ms_deform_attn_dequantize_attn_cuda
-GPGPU-Sim PTX: Setting up arguments for 8 bytes starting at 0x7fff59383df0..
-GPGPU-Sim PTX: Setting up arguments for 8 bytes starting at 0x7fff59383de8..
-GPGPU-Sim PTX: Setting up arguments for 4 bytes starting at 0x7fff59383d7c..
-GPGPU-Sim PTX: Setting up arguments for 4 bytes starting at 0x7fff59383d78..
-GPGPU-Sim PTX: Setting up arguments for 4 bytes starting at 0x7fff59383d74..
+GPGPU-Sim PTX: Setting up arguments for 8 bytes starting at 0x7fff96b6bbd0..
+GPGPU-Sim PTX: Setting up arguments for 8 bytes starting at 0x7fff96b6bbc8..
+GPGPU-Sim PTX: Setting up arguments for 4 bytes starting at 0x7fff96b6bb5c..
+GPGPU-Sim PTX: Setting up arguments for 4 bytes starting at 0x7fff96b6bb58..
+GPGPU-Sim PTX: Setting up arguments for 4 bytes starting at 0x7fff96b6bb54..
 
 GPGPU-Sim PTX: cudaLaunch for 0x0x407856 (mode=performance simulation) on stream 0
 GPGPU-Sim PTX: finding reconvergence points for '_Z22dequantize_attn_kernelPKiPffii'...
@@ -5866,7 +5866,7 @@ GPGPU-Sim uArch: Shader 41 bind to kernel 4 '_Z22dequantize_attn_kernelPKiPffii'
 Destroy streams for kernel 4: size 0
 kernel_name = _Z22dequantize_attn_kernelPKiPffii 
 kernel_launch_uid = 4 
-kernel_stream_id = 128855052504224
+kernel_stream_id = 137025422478496
 gpu_sim_cycle = 6303
 gpu_sim_insn = 819200
 gpu_ipc =     129.9698
@@ -7506,20 +7506,20 @@ GPGPU-Sim API: cudaEventSynchronize ** event detected
 event update
 [DEBUG] 调用 ms_deform_attn_cuda_forward
 GPGPU-Sim PTX: WARNING: Asynchronous memset not supported (cudaError_t cudaMemsetAsyncInternal(void*, int, size_t, cudaStream_t, gpgpu_context*))
-GPGPU-Sim PTX: Setting up arguments for 4 bytes starting at 0x7fff59383b4c..
-GPGPU-Sim PTX: Setting up arguments for 8 bytes starting at 0x7fff59383c20..
-GPGPU-Sim PTX: Setting up arguments for 8 bytes starting at 0x7fff59383c18..
-GPGPU-Sim PTX: Setting up arguments for 8 bytes starting at 0x7fff59383c10..
-GPGPU-Sim PTX: Setting up arguments for 8 bytes starting at 0x7fff59383c08..
-GPGPU-Sim PTX: Setting up arguments for 8 bytes starting at 0x7fff59383c00..
-GPGPU-Sim PTX: Setting up arguments for 4 bytes starting at 0x7fff59383c40..
-GPGPU-Sim PTX: Setting up arguments for 4 bytes starting at 0x7fff59383c48..
-GPGPU-Sim PTX: Setting up arguments for 4 bytes starting at 0x7fff59383c50..
-GPGPU-Sim PTX: Setting up arguments for 4 bytes starting at 0x7fff59383c58..
-GPGPU-Sim PTX: Setting up arguments for 4 bytes starting at 0x7fff59383c60..
-GPGPU-Sim PTX: Setting up arguments for 4 bytes starting at 0x7fff59383c68..
-GPGPU-Sim PTX: Setting up arguments for 4 bytes starting at 0x7fff59383c70..
-GPGPU-Sim PTX: Setting up arguments for 8 bytes starting at 0x7fff59383bf8..
+GPGPU-Sim PTX: Setting up arguments for 4 bytes starting at 0x7fff96b6b92c..
+GPGPU-Sim PTX: Setting up arguments for 8 bytes starting at 0x7fff96b6ba00..
+GPGPU-Sim PTX: Setting up arguments for 8 bytes starting at 0x7fff96b6b9f8..
+GPGPU-Sim PTX: Setting up arguments for 8 bytes starting at 0x7fff96b6b9f0..
+GPGPU-Sim PTX: Setting up arguments for 8 bytes starting at 0x7fff96b6b9e8..
+GPGPU-Sim PTX: Setting up arguments for 8 bytes starting at 0x7fff96b6b9e0..
+GPGPU-Sim PTX: Setting up arguments for 4 bytes starting at 0x7fff96b6ba20..
+GPGPU-Sim PTX: Setting up arguments for 4 bytes starting at 0x7fff96b6ba28..
+GPGPU-Sim PTX: Setting up arguments for 4 bytes starting at 0x7fff96b6ba30..
+GPGPU-Sim PTX: Setting up arguments for 4 bytes starting at 0x7fff96b6ba38..
+GPGPU-Sim PTX: Setting up arguments for 4 bytes starting at 0x7fff96b6ba40..
+GPGPU-Sim PTX: Setting up arguments for 4 bytes starting at 0x7fff96b6ba48..
+GPGPU-Sim PTX: Setting up arguments for 4 bytes starting at 0x7fff96b6ba50..
+GPGPU-Sim PTX: Setting up arguments for 8 bytes starting at 0x7fff96b6b9d8..
 
 GPGPU-Sim PTX: cudaLaunch for 0x0x406df3 (mode=performance simulation) on stream 0
 GPGPU-Sim PTX: finding reconvergence points for '_Z31ms_deformable_im2col_gpu_kernelIfEviPKT_PKlS4_S2_S2_iiiiiiiPS0_'...
@@ -7623,7 +7623,7 @@ GPGPU-Sim uArch: Shader 13 bind to kernel 5 '_Z31ms_deformable_im2col_gpu_kernel
 Destroy streams for kernel 5: size 0
 kernel_name = _Z31ms_deformable_im2col_gpu_kernelIfEviPKT_PKlS4_S2_S2_iiiiiiiPS0_ 
 kernel_launch_uid = 5 
-kernel_stream_id = 128855051513952
+kernel_stream_id = 137025421488224
 gpu_sim_cycle = 18601
 gpu_sim_insn = 29818880
 gpu_ipc =    1603.0793
@@ -7642,7 +7642,7 @@ partiton_level_parallism_util =       5.0341
 partiton_level_parallism_util_total  =      12.2231
 L2_BW  =      32.1753 GB/Sec
 L2_BW_total  =     127.8701 GB/Sec
-gpu_total_sim_rate=882073
+gpu_total_sim_rate=840070
 
 ========= Core cache stats =========
 L1I_cache:
@@ -9247,10 +9247,10 @@ Reply_Network_out_buffer_avg_util =       0.0767
 ----------------------------END-of-Interconnect-DETAILS-------------------------
 
 
-gpgpu_simulation_time = 0 days, 0 hrs, 0 min, 40 sec (40 sec)
-gpgpu_simulation_rate = 882073 (inst/sec)
-gpgpu_simulation_rate = 1335 (cycle/sec)
-gpgpu_silicon_slowdown = 847940x
+gpgpu_simulation_time = 0 days, 0 hrs, 0 min, 42 sec (42 sec)
+gpgpu_simulation_rate = 840070 (inst/sec)
+gpgpu_simulation_rate = 1271 (cycle/sec)
+gpgpu_silicon_slowdown = 890637x
 [DEBUG] ms_deform_attn_cuda_forward 调用完成
 event update
 GPGPU-Sim API: cudaEventSynchronize ** waiting for event
@@ -9283,7 +9283,7 @@ D2H传输完成 (0.000 us)
   SO预测时间:        9.698 us
   Attn预测时间:      9.318 us
   反量化时间:        11.739 us
-  主机量化时间:      7.442 ms
+  主机量化时间:      7.349 ms
 
 采样聚合阶段:
   Kernel执行时间:    16.432 us
