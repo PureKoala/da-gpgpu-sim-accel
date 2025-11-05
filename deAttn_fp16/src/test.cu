@@ -338,7 +338,8 @@ int main(int argc, char** argv) {
     printf("分配设备内存...\n");
     
     // 采样聚合阶段的设备内存
-    float *d_value, *d_sampling_loc, *d_attn_weight, *d_output;
+    float *d_value, *d_output;
+    // 注意：d_sampling_loc 和 d_attn_weight 不再需要，直接使用预测结果
     int64_t *d_spatial_shapes, *d_level_start_index;
     
     printf("[DEBUG] cudaMalloc d_value\n");
@@ -347,10 +348,11 @@ int main(int argc, char** argv) {
     CUDA_CHECK(cudaMalloc(&d_spatial_shapes, spatial_shapes_size * sizeof(int64_t)));
     printf("[DEBUG] cudaMalloc d_level_start_index\n");
     CUDA_CHECK(cudaMalloc(&d_level_start_index, level_start_index_size * sizeof(int64_t)));
-    printf("[DEBUG] cudaMalloc d_sampling_loc\n");
-    CUDA_CHECK(cudaMalloc(&d_sampling_loc, sampling_loc_size * sizeof(float)));
-    printf("[DEBUG] cudaMalloc d_attn_weight\n");
-    CUDA_CHECK(cudaMalloc(&d_attn_weight, attn_weight_size * sizeof(float)));
+    // 不再分配 d_sampling_loc 和 d_attn_weight，直接使用预测结果
+    // printf("[DEBUG] cudaMalloc d_sampling_loc\n");
+    // CUDA_CHECK(cudaMalloc(&d_sampling_loc, sampling_loc_size * sizeof(float)));
+    // printf("[DEBUG] cudaMalloc d_attn_weight\n");
+    // CUDA_CHECK(cudaMalloc(&d_attn_weight, attn_weight_size * sizeof(float)));
     printf("[DEBUG] cudaMalloc d_output\n");
     CUDA_CHECK(cudaMalloc(&d_output, output_size * sizeof(float)));
     
@@ -372,8 +374,8 @@ int main(int argc, char** argv) {
     size_t total_device_memory = value_size * sizeof(float) + 
                                   spatial_shapes_size * sizeof(int64_t) +
                                   level_start_index_size * sizeof(int64_t) +
-                                  sampling_loc_size * sizeof(float) +
-                                  attn_weight_size * sizeof(float) +
+                                  // sampling_loc_size * sizeof(float) +  // 不再需要
+                                  // attn_weight_size * sizeof(float) +   // 不再需要
                                   output_size * sizeof(float) +
                                   Q_size * sizeof(half) +
                                   W_SO_size * sizeof(half) +
@@ -476,16 +478,12 @@ int main(int argc, char** argv) {
     CUDA_CHECK(cudaEventElapsedTime(&pred_attn_time, start_pred_attn, stop_pred_attn));
     printf("  Attn预测完成 (%.3f us)\n", pred_attn_time);
     
-    // 3. 复制到最终的采样位置和注意力权重缓冲区 (只复制有效部分)
-    // 注意：d_SO_fp32和d_A_fp32包含填充，需要去除填充复制到d_sampling_loc和d_attn_weight
-    printf("  [3/3] 复制预测结果到采样聚合阶段输入 (去除填充)...\n");
+    // 注意：直接使用d_SO_fp32和d_A_fp32作为输入，无需memcpy！
+    // 原始维度 SO_out_orig=%d 和 A_out_orig=%d 已经足够
+    // 填充的额外元素不影响forward kernel（它只读取有效部分）
+    printf("  [3/3] 跳过memcpy，直接使用预测结果 (零拷贝优化)...\n");
     
-    // 简化版本：直接使用填充后的结果（在实际应用中应该去除填充）
-    // 这里为了简化，我们假设采样聚合阶段可以处理填充的数据
-    CUDA_CHECK(cudaMemcpy(d_sampling_loc, d_SO_fp32, sampling_loc_size * sizeof(float), cudaMemcpyDeviceToDevice));
-    CUDA_CHECK(cudaMemcpy(d_attn_weight, d_A_fp32, attn_weight_size * sizeof(float), cudaMemcpyDeviceToDevice));
-    
-    printf("预测阶段总时间: %.3f us (无需量化/反量化开销!)\n\n", pred_so_time + pred_attn_time);
+    printf("预测阶段总时间: %.3f us (无需量化/反量化开销，无memcpy开销!)\n\n", pred_so_time + pred_attn_time);
     
     // ==================== 执行Deformable Attention Forward (采样聚合阶段) ====================
     printf("[DEBUG] 开始采样聚合阶段\n");
@@ -498,8 +496,8 @@ int main(int argc, char** argv) {
         d_value,
         d_spatial_shapes,
         d_level_start_index,
-        d_sampling_loc,
-        d_attn_weight,
+        d_SO_fp32,        // 直接使用预测结果，无需memcpy
+        d_A_fp32,         // 直接使用预测结果，无需memcpy
         d_output,
         batch_size,
         spatial_size,
@@ -572,8 +570,8 @@ int main(int argc, char** argv) {
     cudaFree(d_value);
     cudaFree(d_spatial_shapes);
     cudaFree(d_level_start_index);
-    cudaFree(d_sampling_loc);
-    cudaFree(d_attn_weight);
+    // cudaFree(d_sampling_loc);  // 不再需要
+    // cudaFree(d_attn_weight);   // 不再需要
     cudaFree(d_output);
     
     // 释放预测阶段设备内存

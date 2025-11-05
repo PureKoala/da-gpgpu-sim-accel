@@ -135,7 +135,8 @@ enum uarch_op_t {
   SPECIALIZED_UNIT_5_OP,
   SPECIALIZED_UNIT_6_OP,
   SPECIALIZED_UNIT_7_OP,
-  SPECIALIZED_UNIT_8_OP
+  SPECIALIZED_UNIT_8_OP,
+  FMR_SAMPLE_OP  // FMR bilinear sampling operation for Deformable Attention
 };
 typedef enum uarch_op_t op_type;
 

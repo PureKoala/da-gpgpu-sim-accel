@@ -83,7 +83,8 @@ enum exec_unit_type_t {
   DP = 4,
   INT = 5,
   TENSOR = 6,
-  SPECIALIZED = 7
+  FMR = 7,          // FMR (Feature Map Reorganizer) unit
+  SPECIALIZED = 8
 };
 
 class thread_ctx_t {
@@ -381,6 +382,7 @@ class scheduler_unit {  // this can be copied freely, so can be used in std
                  std::vector<shd_warp_t *> *warp, register_set *sp_out,
                  register_set *dp_out, register_set *sfu_out,
                  register_set *int_out, register_set *tensor_core_out,
+                 register_set *fmr_out,
                  std::vector<register_set *> &spec_cores_out,
                  register_set *mem_out, int id)
       : m_supervised_warps(),
@@ -394,6 +396,7 @@ class scheduler_unit {  // this can be copied freely, so can be used in std
         m_sfu_out(sfu_out),
         m_int_out(int_out),
         m_tensor_core_out(tensor_core_out),
+        m_fmr_out(fmr_out),
         m_mem_out(mem_out),
         m_spec_cores_out(spec_cores_out),
         m_id(id) {}
@@ -481,6 +484,7 @@ class scheduler_unit {  // this can be copied freely, so can be used in std
   register_set *m_sfu_out;
   register_set *m_int_out;
   register_set *m_tensor_core_out;
+  register_set *m_fmr_out;  // FMR output register set
   register_set *m_mem_out;
   std::vector<register_set *> &m_spec_cores_out;
   unsigned m_num_issued_last_cycle;
@@ -496,10 +500,11 @@ class lrr_scheduler : public scheduler_unit {
                 std::vector<shd_warp_t *> *warp, register_set *sp_out,
                 register_set *dp_out, register_set *sfu_out,
                 register_set *int_out, register_set *tensor_core_out,
+                register_set *fmr_out,
                 std::vector<register_set *> &spec_cores_out,
                 register_set *mem_out, int id)
       : scheduler_unit(stats, shader, scoreboard, simt, warp, sp_out, dp_out,
-                       sfu_out, int_out, tensor_core_out, spec_cores_out,
+                       sfu_out, int_out, tensor_core_out, fmr_out, spec_cores_out,
                        mem_out, id) {}
   virtual ~lrr_scheduler() {}
   virtual void order_warps();
@@ -515,10 +520,11 @@ class rrr_scheduler : public scheduler_unit {
                 std::vector<shd_warp_t *> *warp, register_set *sp_out,
                 register_set *dp_out, register_set *sfu_out,
                 register_set *int_out, register_set *tensor_core_out,
+                register_set *fmr_out,
                 std::vector<register_set *> &spec_cores_out,
                 register_set *mem_out, int id)
       : scheduler_unit(stats, shader, scoreboard, simt, warp, sp_out, dp_out,
-                       sfu_out, int_out, tensor_core_out, spec_cores_out,
+                       sfu_out, int_out, tensor_core_out, fmr_out, spec_cores_out,
                        mem_out, id) {}
   virtual ~rrr_scheduler() {}
   virtual void order_warps();
@@ -534,10 +540,11 @@ class gto_scheduler : public scheduler_unit {
                 std::vector<shd_warp_t *> *warp, register_set *sp_out,
                 register_set *dp_out, register_set *sfu_out,
                 register_set *int_out, register_set *tensor_core_out,
+                register_set *fmr_out,
                 std::vector<register_set *> &spec_cores_out,
                 register_set *mem_out, int id)
       : scheduler_unit(stats, shader, scoreboard, simt, warp, sp_out, dp_out,
-                       sfu_out, int_out, tensor_core_out, spec_cores_out,
+                       sfu_out, int_out, tensor_core_out, fmr_out, spec_cores_out,
                        mem_out, id) {}
   virtual ~gto_scheduler() {}
   virtual void order_warps();
@@ -553,10 +560,11 @@ class oldest_scheduler : public scheduler_unit {
                    std::vector<shd_warp_t *> *warp, register_set *sp_out,
                    register_set *dp_out, register_set *sfu_out,
                    register_set *int_out, register_set *tensor_core_out,
+                   register_set *fmr_out,
                    std::vector<register_set *> &spec_cores_out,
                    register_set *mem_out, int id)
       : scheduler_unit(stats, shader, scoreboard, simt, warp, sp_out, dp_out,
-                       sfu_out, int_out, tensor_core_out, spec_cores_out,
+                       sfu_out, int_out, tensor_core_out, fmr_out, spec_cores_out,
                        mem_out, id) {}
   virtual ~oldest_scheduler() {}
   virtual void order_warps();
@@ -573,10 +581,11 @@ class two_level_active_scheduler : public scheduler_unit {
                              register_set *sp_out, register_set *dp_out,
                              register_set *sfu_out, register_set *int_out,
                              register_set *tensor_core_out,
+                             register_set *fmr_out,
                              std::vector<register_set *> &spec_cores_out,
                              register_set *mem_out, int id, char *config_str)
       : scheduler_unit(stats, shader, scoreboard, simt, warp, sp_out, dp_out,
-                       sfu_out, int_out, tensor_core_out, spec_cores_out,
+                       sfu_out, int_out, tensor_core_out, fmr_out, spec_cores_out,
                        mem_out, id),
         m_pending_warps() {
     unsigned inner_level_readin;
@@ -623,6 +632,7 @@ class swl_scheduler : public scheduler_unit {
                 std::vector<shd_warp_t *> *warp, register_set *sp_out,
                 register_set *dp_out, register_set *sfu_out,
                 register_set *int_out, register_set *tensor_core_out,
+                register_set *fmr_out,
                 std::vector<register_set *> &spec_cores_out,
                 register_set *mem_out, int id, char *config_string);
   virtual ~swl_scheduler() {}
@@ -1256,6 +1266,26 @@ class tensor_core : public pipelined_simd_unit {
   bool is_issue_partitioned() { return true; }
 };
 
+// FMR (Feature Map Reorganizer) unit for Deformable Attention acceleration
+// Implements hardware-accelerated bilinear interpolation sampling
+class fmr_unit : public pipelined_simd_unit {
+ public:
+  fmr_unit(register_set *result_port, const shader_core_config *config,
+           shader_core_ctx *core, unsigned issue_reg_id);
+  virtual bool can_issue(const warp_inst_t &inst) const {
+    switch (inst.op) {
+      case FMR_SAMPLE_OP:
+        break;
+      default:
+        return false;
+    }
+    return pipelined_simd_unit::can_issue(inst);
+  }
+  virtual void active_lanes_in_pipeline();
+  virtual void issue(register_set &source_reg);
+  bool is_issue_partitioned() { return true; }
+};
+
 class int_unit : public pipelined_simd_unit {
  public:
   int_unit(register_set *result_port, const shader_core_config *config,
@@ -1490,6 +1520,8 @@ enum pipeline_stage_name_t {
   EX_WB,
   ID_OC_TENSOR_CORE,
   OC_EX_TENSOR_CORE,
+  ID_OC_FMR,        // FMR unit pipeline stages
+  OC_EX_FMR,
   N_PIPELINE_STAGES
 };
 
@@ -1497,7 +1529,8 @@ const char *const pipeline_stage_name_decode[] = {
     "ID_OC_SP",          "ID_OC_DP",         "ID_OC_INT", "ID_OC_SFU",
     "ID_OC_MEM",         "OC_EX_SP",         "OC_EX_DP",  "OC_EX_INT",
     "OC_EX_SFU",         "OC_EX_MEM",        "EX_WB",     "ID_OC_TENSOR_CORE",
-    "OC_EX_TENSOR_CORE", "N_PIPELINE_STAGES"};
+    "OC_EX_TENSOR_CORE", "ID_OC_FMR",        "OC_EX_FMR", "N_PIPELINE_STAGES"};
+
 
 struct specialized_unit_params {
   unsigned latency;
@@ -1678,6 +1711,13 @@ class shader_core_config : public core_config {
   unsigned int gpgpu_num_mem_units;
   unsigned int gpgpu_num_int_units;
 
+  // FMR (Feature Map Reorganizer) configuration
+  unsigned int gpgpu_fmr_avail;
+  unsigned int gpgpu_num_fmr_units;
+  unsigned int gpgpu_operand_collector_num_in_ports_fmr;
+  unsigned int gpgpu_operand_collector_num_out_ports_fmr;
+  unsigned int fmr_latency;
+
   // Shader core resources
   unsigned gpgpu_shader_registers;
   int gpgpu_warpdistro_shader;
@@ -1693,6 +1733,7 @@ class shader_core_config : public core_config {
   unsigned max_sfu_latency;
   unsigned max_dp_latency;
   unsigned max_tensor_core_latency;
+  unsigned max_fmr_latency;  // FMR maximum latency
 
   unsigned n_simt_cores_per_cluster;
   unsigned n_simt_clusters;
