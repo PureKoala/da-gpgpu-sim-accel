@@ -16,6 +16,9 @@
 
 // Pure CUDA forward interface (no PyTorch dependencies)
 // All pointers are to device memory
+// fmr_mode: 0 = Disable FMR (GMEM only)
+//           1 = Selective load (analyze then load beneficial tiles) [DEFAULT]
+//           2 = Force load all levels
 void ms_deform_attn_cuda_forward(
     const float* d_value,                    // [batch, spatial_size, num_heads, channels]
     const int64_t* d_spatial_shapes,         // [num_levels, 2] (height, width)
@@ -30,7 +33,8 @@ void ms_deform_attn_cuda_forward(
     int num_levels,
     int num_query,
     int num_point,
-    cudaStream_t stream = 0);
+    cudaStream_t stream = 0,
+    int fmr_mode = 1);
 
 // Pure CUDA backward interface (no PyTorch dependencies)
 void ms_deform_attn_cuda_backward(

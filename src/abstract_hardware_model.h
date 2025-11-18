@@ -973,7 +973,7 @@ class inst_t {
   }
   bool is_load() const {
     return (op == LOAD_OP || op == TENSOR_CORE_LOAD_OP ||
-            memory_op == memory_load);
+            op == FMR_SAMPLE_OP || memory_op == memory_load);
   }
   bool is_store() const {
     return (op == STORE_OP || op == TENSOR_CORE_STORE_OP ||
@@ -1074,6 +1074,13 @@ class warp_inst_t : public inst_t {
     m_is_depbar = false;
 
     m_depbar_group_no = 0;
+    
+    // FMR:
+    m_fmr_tile_width = 0;
+    m_fmr_tile_height = 0;
+    m_fmr_stride = 0;
+    m_fmr_gmem_base = 0;
+    m_fmr_smem_base = 0;
   }
   warp_inst_t(const core_config *config) {
     m_uid = 0;
@@ -1095,6 +1102,13 @@ class warp_inst_t : public inst_t {
     m_is_depbar = false;
 
     m_depbar_group_no = 0;
+    
+    // FMR:
+    m_fmr_tile_width = 0;
+    m_fmr_tile_height = 0;
+    m_fmr_stride = 0;
+    m_fmr_gmem_base = 0;
+    m_fmr_smem_base = 0;
   }
   virtual ~warp_inst_t() {}
 
@@ -1237,6 +1251,13 @@ class warp_inst_t : public inst_t {
   unsigned long long get_streamID() const { return m_streamID; }
   unsigned get_schd_id() const { return m_scheduler_id; }
   active_mask_t get_warp_active_mask() const { return m_warp_active_mask; }
+  
+  // FMR tile metadata accessors
+  int get_fmr_tile_width() const { return m_fmr_tile_width; }
+  int get_fmr_tile_height() const { return m_fmr_tile_height; }
+  int get_fmr_stride() const { return m_fmr_stride; }
+  addr_t get_fmr_gmem_base() const { return m_fmr_gmem_base; }
+  addr_t get_fmr_smem_base() const { return m_fmr_smem_base; }
 
  protected:
   unsigned m_uid;
@@ -1287,6 +1308,13 @@ class warp_inst_t : public inst_t {
   bool m_is_depbar;
 
   unsigned int m_depbar_group_no;
+  
+  // FMR: tile loader metadata for dynamic latency calculation
+  int m_fmr_tile_width;   // tile width (number of f16 elements per row)
+  int m_fmr_tile_height;  // tile height (number of rows)
+  int m_fmr_stride;       // stride for GMEM access (source image width)
+  addr_t m_fmr_gmem_base; // global memory base address
+  addr_t m_fmr_smem_base; // shared memory base address
 };
 
 void move_warp(warp_inst_t *&dst, warp_inst_t *&src);

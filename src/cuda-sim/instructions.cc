@@ -48,6 +48,9 @@ class ptx_recognizer;
 #include <map>
 #include <sstream>
 #include <string>
+#include <vector>
+#include <utility>
+#include <algorithm>
 #include "../abstract_hardware_model.h"
 #include "../gpgpu-sim/gpu-sim.h"
 #include "../gpgpu-sim/shader.h"
@@ -184,6 +187,10 @@ int acc_float_offset(int index, int wmma_layout, int stride) {
 }
 
 void inst_not_implemented(const ptx_instruction *pI);
+
+// FMR (Feature Map Reorganizer) timing model implementation
+void ld_sample_fmr_impl(const ptx_instruction *pI, core_t *core, warp_inst_t &inst);
+
 ptx_reg_t srcOperandModifiers(ptx_reg_t opData, operand_info opInfo,
                               operand_info dstInfo, unsigned type,
                               ptx_thread_info *thread);
@@ -2283,6 +2290,26 @@ void call_impl(const ptx_instruction *pI, ptx_thread_info *thread) {
   assert(target.is_function_address());
   const symbol *func_addr = target.get_symbol();
   function_info *target_func = func_addr->get_pc();
+  
+  // Get function name early for FMR interception check
+  std::string fname = target_func->get_name();
+  printf("GPGPU-Sim PTX: Calling function: %s\n", fname.c_str());
+  fflush(stdout); 
+  
+  // ========================================================================
+  // FMR INTERCEPTION - Should never reach here (intercepted in ptx_exec_inst)
+  // ========================================================================
+  if (fname.find("fmr_sample") != std::string::npos) {
+    printf("FATAL ERROR: FMR call '%s' reached call_impl().\n", fname.c_str());
+    printf("FMR should be intercepted in ptx_exec_inst() before reaching here.\n");
+    printf("This indicates a bug in the FMR interception logic.\n");
+    fflush(stdout);
+    abort();
+  }
+  // ========================================================================
+  // END FMR INTERCEPTION
+  // ========================================================================
+  
   if (target_func->is_pdom_set()) {
     printf("GPGPU-Sim PTX: PDOM analysis already done for %s \n",
            target_func->get_name().c_str());
@@ -2319,7 +2346,6 @@ void call_impl(const ptx_instruction *pI, ptx_thread_info *thread) {
   }
 
   // handle intrinsic functions
-  std::string fname = target_func->get_name();
   if (fname == "vprintf") {
     gpgpusim_cuda_vprintf(pI, thread, target_func);
     return;
@@ -3554,6 +3580,234 @@ void ld_exec(const ptx_instruction *pI, ptx_thread_info *thread) {
 void ld_impl(const ptx_instruction *pI, ptx_thread_info *thread) {
   ld_exec(pI, thread);
 }
+
+// ============================================================================
+// FMR Implementation - Timing Model (Warp-Level)
+// ============================================================================
+void ld_sample_fmr_impl(const ptx_instruction *pI, core_t *core, warp_inst_t &inst) {
+  // FMR Tile Loader Timing Model - Warp-Cooperative Load with Interleaved SMEM
+  // This function generates memory transactions for timing simulation AND performs functional simulation
+  // Functional correctness is also handled here (no separate functional implementation needed)
+  
+  size_t elem_size = 2;  // f16 = 2 bytes
+  unsigned smid;
+  ptx_thread_info *thread;
+  
+  // Get operands (from intercepted CALL instruction)
+  // For void return function: operand[n_return + 1 + arg]
+  // n_return = 0 (void), so: operand[1 + arg]
+  // operand[1]: arg0 - gmem_base_addr (u64)
+  // operand[2]: arg1 - smem_base_addr (u64)
+  // operand[3]: arg2 - width (s32)
+  // operand[4]: arg3 - height (s32)
+  // operand[5]: arg4 - stride (s32)
+  const operand_info &dst = pI->dst();
+  const operand_info &gmem_base_op = pI->operand_lookup(1);
+  const operand_info &smem_base_op = pI->operand_lookup(2);
+  const operand_info &width_op = pI->operand_lookup(3);
+  const operand_info &height_op = pI->operand_lookup(4);
+  const operand_info &stride_op = pI->operand_lookup(5);
+  
+  int tid = inst.warp_id() * core->get_warp_size();
+  memory_space_t gmem_space = global_space;
+  memory_space_t smem_space = shared_space;
+  _memory_op_t insn_memory_op = memory_load;  // FMR is a load operation
+  
+  // Get tile parameters from first thread (uniform across warp)
+  thread = core->get_thread_info()[tid];
+  
+  // Read parameters from local memory (CALL instruction passes params via .param space)
+  assert(gmem_base_op.is_param_local());
+  assert(smem_base_op.is_param_local());
+  assert(width_op.is_param_local());
+  assert(height_op.is_param_local());
+  assert(stride_op.is_param_local());
+  
+  unsigned long long gmem_base;
+  unsigned long long smem_base;
+  int width, height, stride;
+  
+  thread->m_local_mem->read(gmem_base_op.get_symbol()->get_address(), sizeof(unsigned long long), &gmem_base);
+  thread->m_local_mem->read(smem_base_op.get_symbol()->get_address(), sizeof(unsigned long long), &smem_base);
+  thread->m_local_mem->read(width_op.get_symbol()->get_address(), sizeof(int), &width);
+  thread->m_local_mem->read(height_op.get_symbol()->get_address(), sizeof(int), &height);
+  thread->m_local_mem->read(stride_op.get_symbol()->get_address(), sizeof(int), &stride);
+  
+  smid = thread->get_hw_sid();
+  
+  // Parameter validation
+  if (width <= 0 || height <= 0) {
+    printf("FMR ERROR: Invalid tile dimensions: width=%d, height=%d\n", width, height);
+    assert(0 && "FMR: Invalid tile dimensions");
+  }
+  if (stride < width) {
+    printf("FMR WARNING: Stride (%d) < width (%d). This may cause incorrect memory access.\n", 
+           stride, width);
+  }
+  
+  // Address space conversion
+  if (whichspace(gmem_base) == shared_space) {
+    gmem_base = generic_to_shared(smid, gmem_base);
+    gmem_space = shared_space;
+  }
+  smem_base = generic_to_shared(smid, smem_base);
+  
+  // Get memory space pointers for functional simulation
+  memory_space *gmem = NULL;
+  memory_space *smem = NULL;
+  decode_space(gmem_space, thread, gmem_base_op, gmem, gmem_base);
+  decode_space(smem_space, thread, smem_base_op, smem, smem_base);
+  
+  if (core->get_gpu()->gpgpu_ctx->debug_tensorcore) {
+    printf("FMR Tile Load: gmem=0x%llx, smem=0x%llx, w=%d, h=%d, stride=%d\n",
+           (unsigned long long)gmem_base, (unsigned long long)smem_base, 
+           width, height, stride);
+  }
+  
+  // Store FMR tile metadata in warp_inst_t for statistics and debugging
+  inst.m_fmr_tile_width = width;
+  inst.m_fmr_tile_height = height;
+  inst.m_fmr_stride = stride;
+  inst.m_fmr_gmem_base = gmem_base;
+  inst.m_fmr_smem_base = smem_base;
+  
+  // ========================================================================
+  // TMA-like (Tensor Memory Accelerator-like) Load with Interleaved SMEM
+  // Single-thread activation (thread 0) generates all addresses
+  // Addresses are batched and stored in multiple thread slots
+  // Similar to NVIDIA TMA address generation module
+  // ========================================================================
+  int warp_size = core->get_warp_size();
+  
+  // Step 1: Generate all GMEM addresses (TMA-like address generation)
+  // Similar to hardware TMA, we generate all addresses upfront
+  std::vector<new_addr_type> all_gmem_addrs;
+  std::vector<std::pair<int, int> > addr_to_row_col;  // For functional simulation mapping
+  
+  for (int row = 0; row < height; row++) {
+    int loads_per_row = (width + 7) / 8;  // Ceiling division: ceil(width / 8)
+    for (int load = 0; load < loads_per_row; load++) {
+      int start_col = load * 8;
+      addr_t gmem_addr = gmem_base + (row * stride + start_col) * elem_size;
+      all_gmem_addrs.push_back(gmem_addr);
+      addr_to_row_col.push_back(std::make_pair(row, start_col));
+    }
+  }
+  
+  size_t total_txns = all_gmem_addrs.size();
+  
+  // Step 2: TMA-like address allocation - batch addresses into thread slots
+  // Calculate number of batches needed
+  int num_batches = (total_txns + MAX_ACCESSES_PER_INSN_PER_THREAD - 1) / 
+                    MAX_ACCESSES_PER_INSN_PER_THREAD;
+  
+  // Limit to available thread slots
+  if (num_batches > warp_size) {
+    if (core->get_gpu()->gpgpu_ctx->debug_tensorcore) {
+      printf("FMR WARNING: Tile size (%dx%d) requires %d batches, "
+             "but only %d thread slots available. Some transactions may be truncated.\n",
+             width, height, num_batches, warp_size);
+    }
+    num_batches = warp_size;  // Limit to maximum available slots
+  }
+  
+  // Clear all threads initially, then activate only slots that store addresses
+  active_mask_t active_mask;
+  active_mask.reset();
+  
+  // Batch addresses and store in thread slots
+  for (int batch = 0; batch < num_batches; batch++) {
+    size_t start_idx = batch * MAX_ACCESSES_PER_INSN_PER_THREAD;
+    size_t end_idx = std::min(start_idx + MAX_ACCESSES_PER_INSN_PER_THREAD, total_txns);
+    size_t batch_size = end_idx - start_idx;
+    
+    // Prepare batch address array
+    new_addr_type batch_addrs[MAX_ACCESSES_PER_INSN_PER_THREAD];
+    for (size_t i = 0; i < batch_size; i++) {
+      batch_addrs[i] = all_gmem_addrs[start_idx + i];
+    }
+    // Fill remaining positions with 0 (indicates end of addresses)
+    for (size_t i = batch_size; i < MAX_ACCESSES_PER_INSN_PER_THREAD; i++) {
+      batch_addrs[i] = 0;
+    }
+    
+    // Store addresses in thread slot 'batch'
+    inst.set_addr(batch, batch_addrs, (unsigned)batch_size);
+    
+    // Activate this thread slot
+    active_mask.set(batch);
+  }
+  
+  // FIX: Do NOT modify inst.set_active() - keep all originally active threads active
+  // Only batch slot threads will contribute memory accesses (via inst.set_addr()),
+  // but all threads need to execute ptx_exec_inst() to advance their PC correctly.
+  // Threads without addresses will have empty m_accessq, and generate_mem_accesses()
+  // will naturally skip them.
+  //
+  // REMOVED: inst.set_active(active_mask);  // This caused PC desync
+
+  // Step 3: Functional simulation - Thread 0 processes all data
+  // This ensures data correctness regardless of batch limits
+  thread = core->get_thread_info()[tid];  // Thread 0
+  
+  for (size_t addr_idx = 0; addr_idx < all_gmem_addrs.size(); addr_idx++) {
+    int row = addr_to_row_col[addr_idx].first;
+    int start_col = addr_to_row_col[addr_idx].second;
+    int end_col = std::min(start_col + 8, width);
+    
+    // Process 8 elements (or fewer for last load in row)
+    for (int col = start_col; col < end_col; col++) {
+      addr_t gmem_read_addr = gmem_base + (row * stride + col) * elem_size;
+      
+      // Calculate SMEM address (tile-internal, continuous)
+      int tile_idx = row * width + col;
+      addr_t smem_write_addr = smem_base + tile_idx * elem_size;
+      
+      // Read from GMEM
+      uint16_t data;
+      gmem->read(gmem_read_addr, elem_size, &data);
+      
+      // Write to SMEM (interleaved bank layout)
+      // NOTE: Bank interleaving is handled by SMEM hardware controller
+      // We use continuous logical addressing; hardware maps to physical banks
+      smem->write(smem_write_addr, elem_size, &data, thread, pI);
+    }
+  }
+  
+  // Step 4: Set memory transaction information for timing model
+  // The memory system will use addresses stored in thread slots via generate_mem_accesses()
+  inst.op = FMR_SAMPLE_OP;  // Set opcode so generate_mem_accesses() recognizes it
+  inst.space = gmem_space;
+  inst.data_size = 16;  // 128-bit = 16 bytes per transaction
+  inst.memory_op = insn_memory_op;  // Explicitly set memory_op
+  assert(inst.memory_op == insn_memory_op);
+  
+  // Step 5: Debug output
+  if (core->get_gpu()->gpgpu_ctx->debug_tensorcore) {
+    printf("FMR Tile Load (TMA-like): gmem=0x%llx, smem=0x%llx, w=%d, h=%d, stride=%d\n",
+           (unsigned long long)gmem_base, (unsigned long long)smem_base, 
+           width, height, stride);
+    printf("FMR: Total transactions=%d, Batches=%d, Active thread slots: ", 
+           total_txns, num_batches);
+    for (int i = 0; i < warp_size; i++) {
+      if (active_mask.test(i)) printf("%d ", i);
+    }
+    printf("\n");
+    printf("FMR: Interleaved Bank Layout - Row[even]→Banks[0,1], Row[odd]→Banks[2,3]\n");
+    
+    // Calculate bank distribution for first 4×4 elements (debug)
+    int bank_counts[4] = {0, 0, 0, 0};
+    for (int row = 0; row < std::min(height, 4); row++) {
+      for (int col = 0; col < std::min(width, 4); col++) {
+        int bank = ((row % 2) * 2) + (col % 2);
+        bank_counts[bank]++;
+      }
+    }
+    printf("FMR: Bank distribution (first 4×4): B0=%d, B1=%d, B2=%d, B3=%d\n",
+           bank_counts[0], bank_counts[1], bank_counts[2], bank_counts[3]);
+  }
+}
+
 void ldu_impl(const ptx_instruction *pI, ptx_thread_info *thread) {
   ld_exec(pI, thread);
 }

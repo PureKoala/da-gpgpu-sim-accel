@@ -1565,12 +1565,14 @@ class shader_core_config : public core_config {
 
     toks = strtok(toks, ",");
 
-    /*	Removing the tensorcore pipeline while reading the config files if the
-       tensor core is not available. If we won't remove it, old regression will
-       be broken. So to support the legacy config files it's best to handle in
-       this way.
+    /*	Removing the tensorcore and FMR pipeline stages while reading the config 
+       files if they are not available. If we won't remove them, old regression 
+       will be broken. So to support the legacy config files it's best to handle 
+       in this way.
      */
-    int num_config_to_read = N_PIPELINE_STAGES - 2 * (!gpgpu_tensor_core_avail);
+    int num_config_to_read = N_PIPELINE_STAGES 
+                           - 2 * (!gpgpu_tensor_core_avail)
+                           - 2 * (!gpgpu_fmr_avail);
 
     for (int i = 0; i < num_config_to_read; i++) {
       assert(toks);

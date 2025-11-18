@@ -2450,10 +2450,41 @@ void fmr_unit::issue(register_set &source_reg) {
   warp_inst_t **ready_reg =
       source_reg.get_ready(m_config->sub_core_model, m_issue_reg_id);
 
-  (*ready_reg)->op_pipe = SPECIALIZED__OP;
-  // FMR performs bilinear interpolation with hardware address generation
-  // Note: incfmr_stat method will be added to shader_core_ctx
+  (*ready_reg)->op_pipe = MEM__OP;  // Changed: FMR is a memory operation, not SPECIALIZED__OP
+  
+  // FMR Tile Loader: Memory-accurate latency model
+  //
+  // Previous approach (WRONG):
+  //   - Calculate fixed latency in fmr_unit::issue()
+  //   - Ignored cache hit/miss, bank conflicts, interconnect delays
+  //
+  // Current approach (CORRECT - following WMMA load pattern):
+  //   1. instructions.cc generates memory transactions via inst.set_addr()
+  //   2. scheduler calls inst.generate_mem_accesses()
+  //   3. Transactions sent through ldst_unit to memory system
+  //   4. Actual latency determined by:
+  //      - L1/L2 cache hit/miss
+  //      - DRAM access latency
+  //      - Memory bandwidth saturation
+  //      - Interconnect delays
+  //      - Bank conflicts (for SMEM writes)
+  //
+  // Key difference from standard load:
+  //   - FMR loads from GMEM and writes to SMEM (DMA-like)
+  //   - Memory transactions are already generated in timing model
+  //   - No need for additional latency calculation here
+  //
+  // FMR unit now acts as a "memory operation marker" rather than
+  // a specialized unit with fixed latency
+  
+  // Statistics collection (optional)
   // m_core->incfmr_stat(m_core->get_config()->warp_size, (*ready_reg)->latency);
+  
+  // Note: No dynamic latency calculation here!
+  // The memory system will handle everything through:
+  //   - ldst_unit::issue() → send to memory
+  //   - ldst_unit::writeback() → complete when memory returns
+  
   pipelined_simd_unit::issue(source_reg);
 }
 

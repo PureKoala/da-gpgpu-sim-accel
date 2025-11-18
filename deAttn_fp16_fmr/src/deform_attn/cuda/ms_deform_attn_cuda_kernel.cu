@@ -35,7 +35,8 @@ void ms_deform_attn_cuda_forward(
     int num_levels,
     int num_query,
     int num_point,
-    cudaStream_t stream)
+    cudaStream_t stream,
+    int fmr_mode)
 {
     // Validate inputs
     if (!d_value || !d_spatial_shapes || !d_level_start_index || 
@@ -49,21 +50,41 @@ void ms_deform_attn_cuda_forward(
     CUDA_CHECK(cudaMemsetAsync(d_output, 0, output_size * sizeof(float), stream));
 
     // Launch im2col kernel
-    ms_deformable_im2col_cuda<float>(
-        stream,
-        d_value,
-        d_spatial_shapes,
-        d_level_start_index,
-        d_sampling_loc,
-        d_attn_weight,
-        batch_size,
-        spatial_size,
-        num_heads,
-        channels,
-        num_levels,
-        num_query,
-        num_point,
-        d_output);
+    // Use FMR-optimized version if USE_FMR_OPTIMIZATION is defined
+    #ifdef USE_FMR_OPTIMIZATION
+        ms_deformable_im2col_cuda_fmr_optimized<float>(
+            stream,
+            d_value,
+            d_spatial_shapes,
+            d_level_start_index,
+            d_sampling_loc,
+            d_attn_weight,
+            batch_size,
+            spatial_size,
+            num_heads,
+            channels,
+            num_levels,
+            num_query,
+            num_point,
+            d_output,
+            fmr_mode);
+    #else
+        ms_deformable_im2col_cuda<float>(
+            stream,
+            d_value,
+            d_spatial_shapes,
+            d_level_start_index,
+            d_sampling_loc,
+            d_attn_weight,
+            batch_size,
+            spatial_size,
+            num_heads,
+            channels,
+            num_levels,
+            num_query,
+            num_point,
+            d_output);
+    #endif
 
     CUDA_CHECK(cudaGetLastError());
 }

@@ -75,12 +75,10 @@ else
 
 	if [ ${IFBUILD} -eq 1 ] 
 	then
-		echo "build" ${NAME}.cu "and all deform_attn sources (with FMR optimization)"
-		# 编译主程序和所有依赖的CUDA源文件，启用FMR优化
-		nvcc -arch=${ARCH} --cudart shared -O3 -Xcompiler -fPIC -DUSE_FMR_OPTIMIZATION -I${SRC} \
+		echo "build" ${NAME}.cu
+		# 只编译测试程序
+		nvcc -arch=${ARCH} --cudart shared -I${SRC} \
 		     ${SRC}/${NAME}.cu \
-		     ${SRC}/deform_attn/cuda/ms_deform_attn_cuda_kernel.cu \
-		     ${SRC}/deform_attn/cuda/ms_deform_attn_predict_wrapper.cu \
 		     -o ${BIN}/${NAME}
 	else 
 		echo "skip build from source"

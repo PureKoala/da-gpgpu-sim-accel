@@ -100,6 +100,7 @@ fma     TC; yylval->int_value = FMA_OP; return OPCODE;
 isspacep TC; yylval->int_value = ISSPACEP_OP; return OPCODE;
 ld      TC; yylval->int_value = LD_OP; return OPCODE;
 ld.volatile TC; yylval->int_value = LD_OP; return OPCODE;
+ld.sample.fmr TC; yylval->int_value = LD_SAMPLE_FMR_OP; return OPCODE;
 ldu     TC; yylval->int_value = LDU_OP; return OPCODE;
 lg2	TC; yylval->int_value = LG2_OP; return OPCODE;
 mad24   TC; yylval->int_value = MAD24_OP; return OPCODE;

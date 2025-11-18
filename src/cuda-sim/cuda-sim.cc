@@ -39,6 +39,10 @@ typedef void *yyscan_t;
 #include <stdio.h>
 #include <map>
 #include <set>
+
+// Forward declaration for FMR timing model function
+void ld_sample_fmr_impl(const ptx_instruction *pI, core_t *core, warp_inst_t &inst);
+
 #include <sstream>
 #include "../../libcuda/gpgpu_context.h"
 #include "../abstract_hardware_model.h"
@@ -1792,6 +1796,7 @@ int tensorcore_op(int inst_opcode) {
 }
 void ptx_thread_info::ptx_exec_inst(warp_inst_t &inst, unsigned lane_id) {
   bool skip = false;
+  bool is_fmr_call = false;  // Flag for FMR interception
   int op_classification = 0;
   addr_t pc = next_instr();
   assert(pc ==
@@ -1854,11 +1859,42 @@ void ptx_thread_info::ptx_exec_inst(warp_inst_t &inst, unsigned lane_id) {
         }
       }
 
+      // ========================================================================
+      // FMR CALL Interception - Timing model only
+      // Intercept __fmr_sample CALL before normal CALL processing
+      // This allows calling ld_sample_fmr_impl() with core and inst parameters
+      // ========================================================================
+      if (inst_opcode == CALL_OP && lane_id == 0) {
+        const operand_info &target = pI->func_addr();
+        if (target.is_function_address()) {
+          const symbol *func_addr = target.get_symbol();
+          function_info *target_func = func_addr->get_pc();
+          std::string fname = target_func->get_name();
+          
+          if (fname.find("fmr_sample") != std::string::npos) {
+            // FMR pseudo-CALL handling:
+            // 1. Execute FMR tile load once (lane 0 only)
+            // 2. Do NOT treat as a real CALL (no callstack push/pop)
+            // 3. All threads execute this code path and advance PC normally
+            //    (no special PC sync needed - all threads call ptx_exec_inst)
+            core_t *core = get_core();
+            ld_sample_fmr_impl(pI, core, inst);
+            
+            // Mark as FMR pseudo call: skip normal opcode switch
+            is_fmr_call = true;
+            skip = true;  // skip generic memory_op/address overwrite & assertion block
+            // Ensure we restore original pI pointer context
+            delete pJ;
+            pI = pI_saved;
+          }
+        }
+      }
+      
       // Tensorcore is warp synchronous operation. So these instructions needs
       // to be executed only once. To make the simulation faster removing the
       // redundant tensorcore operation
-      if (!tensorcore_op(inst_opcode) ||
-          ((tensorcore_op(inst_opcode)) && (lane_id == 0))) {
+      if (!is_fmr_call && (!tensorcore_op(inst_opcode) ||
+          ((tensorcore_op(inst_opcode)) && (lane_id == 0)))) {
         switch (inst_opcode) {
 #define OP_DEF(OP, FUNC, STR, DST, CLASSIFICATION) \
   case OP:                                         \

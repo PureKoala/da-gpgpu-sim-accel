@@ -68,3 +68,16 @@ deAttn/bin/
 deAttn/out/
 **.o
 bin/
+
+.vscode/
+.cursor/
+memory-bank/
+useless/
+
+deAttn_fp16_fmr/sim/
+deAttn_fp16_fmr/bin/
+deAttn_fp16_fmr/out/
+
+deAttn_test_fmr/sim/
+deAttn_test_fmr/bin/
+deAttn_test_fmr/out/

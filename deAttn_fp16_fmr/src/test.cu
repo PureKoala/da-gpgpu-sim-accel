@@ -169,6 +169,29 @@ int main(int argc, char** argv) {
     printf("  Deformable Attention CUDA测试\n");
     printf("========================================\n\n");
     
+    // Parse FMR mode from environment variable or command line
+    int fmr_mode = 0;  // Default: selective load
+    const char* fmr_mode_env = getenv("FMR_MODE");
+    if (fmr_mode_env) {
+        fmr_mode = atoi(fmr_mode_env);
+    }
+    if (argc > 1) {
+        fmr_mode = atoi(argv[1]);
+    }
+    
+    // Validate and print FMR mode
+    if (fmr_mode < 0 || fmr_mode > 2) {
+        printf("警告: 无效的 FMR_MODE=%d，使用默认值 1\n", fmr_mode);
+        fmr_mode = 1;
+    }
+    printf("FMR 模式: %d ", fmr_mode);
+    switch (fmr_mode) {
+        case 0: printf("(禁用 FMR - 仅使用 GMEM)\n"); break;
+        case 1: printf("(选择性加载 - 分析后加载有益的 tiles)\n"); break;
+        case 2: printf("(强制加载所有 levels)\n"); break;
+    }
+    printf("\n");
+    
     // 设置随机种子
     printf("[DEBUG] 设置随机种子\n");
     srand(time(NULL));
@@ -508,7 +531,8 @@ int main(int argc, char** argv) {
         num_levels,
         num_query,
         num_point,
-        0  // default stream
+        0,  // default stream
+        fmr_mode  // FMR mode control
     );
     
     printf("[DEBUG] ms_deform_attn_cuda_forward 调用完成\n");

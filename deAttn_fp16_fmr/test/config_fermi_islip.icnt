@@ -1,0 +1,31 @@
+// GPGPU-Sim Interconnect Configuration
+// Simple configuration for FMR testing
+
+// Network topology
+topology = mesh;
+k = 2;
+n = 1;
+
+// Routing
+routing_function = dim_order;
+
+// Flow control
+num_vcs = 2;
+vc_buf_size = 4;
+
+// Router
+wait_for_tail_credit = 0;
+routing_delay = 1;
+vc_alloc_delay = 1;
+sw_alloc_delay = 1;
+st_final_delay = 1;
+
+input_speedup = 1;
+output_speedup = 1;
+internal_speedup = 1.0;
+
+// Traffic
+injection_rate = 0.1;
+
+// Simulation
+sim_type = throughput;

@@ -4,7 +4,7 @@
 # Compiler and flags
 NVCC = nvcc
 CUDA_ARCH ?= sm_86
-CUDA_FLAGS = -arch=$(CUDA_ARCH) --cudart shared -O3 -Xcompiler -fPIC
+CUDA_FLAGS = -arch=$(CUDA_ARCH) --cudart shared -O3 -Xcompiler -fPIC -DUSE_FMR_OPTIMIZATION
 INCLUDES = -I./src
 
 # Directories
