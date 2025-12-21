@@ -33,7 +33,7 @@ all_labels = labels + ["Others"]
 all_values = np.vstack([values_array, others])
 
 # 3. 创建科研配图
-fig, ax = plt.subplots(figsize=(11, 7), dpi=600)
+fig, ax = plt.subplots(figsize=(12, 5), dpi=600)
 
 # 使用 tab20 色板并显式映射红色系到 2K+ 分辨率
 # tab20 颜色说明: 6-红, 7-浅红, 13-浅粉/红
@@ -57,10 +57,10 @@ ax.stackplot(years, all_values, labels=all_labels, colors=colors, alpha=0.95, ed
 
 # 5. 精细化美化
 # x 参数控制标题水平位置: 0=最左, 0.5=正中, 1=最右, 可以微调如 0.48 或 0.52
-ax.set_title('Historical Trend of Monitor Resolutions in Steam Hardware Survey (2008-2024)', 
-             fontsize=14, fontweight='bold', loc='center', pad=10, ha='center', x=0.55)
+ax.set_title('Trend of Monitor Resolutions in Steam Hardware Survey', 
+             fontsize=16, fontweight='bold', loc='center', pad=10, ha='center', x=0.55)
 ax.set_ylabel('Market Share (%)', fontsize=12, fontweight='medium')
-ax.set_xlabel('Survey Year', fontsize=12, fontweight='medium')
+ax.set_xlabel('Year', fontsize=12, fontweight='medium')
 
 # 轴限制与刻度优化
 ax.set_xlim(2008, 2024)

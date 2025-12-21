@@ -65,21 +65,21 @@ colors = [
 ]
 
 # 6. 绘图
-fig, ax = plt.subplots(figsize=(12, 7), dpi=300)
+fig, ax = plt.subplots(figsize=(12, 5), dpi=300)
 
 ax.stackplot(x_smooth, final_stack_list, labels=final_labels, colors=colors, alpha=0.9, edgecolor='none')
 
 # 7. 细节优化：增加波动感的视觉引导
 # 绘制 2023-2024 的分界线
-ax.axvline(x=2023.0, color='white', linestyle='--', linewidth=1, alpha=0.6)
-ax.text(2021.5, 95, 'Historical Volatility', color='white', fontsize=10, ha='center', weight='bold')
-ax.text(2024.0, 95, 'Market Forecast', color='white', fontsize=10, ha='center', weight='bold')
+# ax.axvline(x=2023.0, color='white', linestyle='--', linewidth=1, alpha=0.6)
+# ax.text(2021.5, 95, 'Historical Volatility', color='white', fontsize=10, ha='center', weight='bold')
+# ax.text(2024.0, 95, 'Market Forecast', color='white', fontsize=10, ha='center', weight='bold')
 
 # 设置标题和标签
-ax.set_title('Global Monitor Refresh Rate Share (2021-2025)',
+ax.set_title('Global Monitor Refresh Rate Share',
              fontsize=16, fontweight='bold', loc='center', pad=10, ha='center', x=0.55)
-ax.set_xlabel('Year', fontsize=11)
-ax.set_ylabel('Market Share (%)', fontsize=11)
+ax.set_xlabel('Year', fontsize=12)
+ax.set_ylabel('Market Share (%)', fontsize=12)
 
 # 坐标轴设置
 ax.set_xlim(2021, 2025)

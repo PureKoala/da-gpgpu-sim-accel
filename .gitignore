@@ -81,3 +81,5 @@ deAttn_fp16_fmr/out/
 deAttn_test_fmr/sim/
 deAttn_test_fmr/bin/
 deAttn_test_fmr/out/
+
+*-env/
