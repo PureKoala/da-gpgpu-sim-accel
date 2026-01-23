@@ -191,6 +191,13 @@ void inst_not_implemented(const ptx_instruction *pI);
 // FMR (Feature Map Reorganizer) timing model implementation
 void ld_sample_fmr_impl(const ptx_instruction *pI, core_t *core, warp_inst_t &inst);
 
+// Deformable Attention Pipeline Implementation
+void deform_pcb_impl(const ptx_instruction *pI, core_t *core, warp_inst_t &inst);
+void deform_gtc_impl(const ptx_instruction *pI, core_t *core, warp_inst_t &inst);
+void deform_tbc_impl(const ptx_instruction *pI, core_t *core, warp_inst_t &inst);
+void deform_tma_impl(const ptx_instruction *pI, core_t *core, warp_inst_t &inst);
+void deform_interp_impl(const ptx_instruction *pI, core_t *core, warp_inst_t &inst);
+
 ptx_reg_t srcOperandModifiers(ptx_reg_t opData, operand_info opInfo,
                               operand_info dstInfo, unsigned type,
                               ptx_thread_info *thread);
@@ -2300,8 +2307,8 @@ void call_impl(const ptx_instruction *pI, ptx_thread_info *thread) {
   // FMR INTERCEPTION - Should never reach here (intercepted in ptx_exec_inst)
   // ========================================================================
   if (fname.find("fmr_sample") != std::string::npos) {
-    printf("FATAL ERROR: FMR call '%s' reached call_impl().\n", fname.c_str());
-    printf("FMR should be intercepted in ptx_exec_inst() before reaching here.\n");
+    printf("FATAL ERROR: FMR function %s should be intercepted before reaching this point.\n", fname.c_str());
+    printf("FMR should be intercepted in ptx_exec_inst before reaching here.\n");
     printf("This indicates a bug in the FMR interception logic.\n");
     fflush(stdout);
     abort();
@@ -3806,6 +3813,487 @@ void ld_sample_fmr_impl(const ptx_instruction *pI, core_t *core, warp_inst_t &in
     printf("FMR: Bank distribution (first 4×4): B0=%d, B1=%d, B2=%d, B3=%d\n",
            bank_counts[0], bank_counts[1], bank_counts[2], bank_counts[3]);
   }
+}
+
+// ============================================================================
+// Deformable Attention Pipeline Implementation
+// ============================================================================
+
+// Stage 1: PCB (Pre-Check Block) - Weight Pruning
+void deform_pcb_impl(const ptx_instruction *pI, core_t *core, warp_inst_t &inst) {
+  // PCB Stage: Pre-Check Block for weight pruning
+  // CUDA signature: __deform_pcb(const float* weights, float threshold, bool* mask, int num_points)
+  // operand[1]: weights (pointer)
+  // operand[2]: threshold (float)
+  // operand[3]: mask (pointer)
+  // operand[4]: num_points (int)
+  
+  int tid = inst.warp_id() * core->get_warp_size();
+  ptx_thread_info *thread = core->get_thread_info()[tid];
+  
+  const operand_info &weights_op = pI->operand_lookup(1);
+  const operand_info &threshold_op = pI->operand_lookup(2);
+  const operand_info &mask_op = pI->operand_lookup(3);
+  const operand_info &num_points_op = pI->operand_lookup(4);
+  
+  // Read parameters from .param space (standard CUDA function call convention)
+  unsigned long long weights_ptr, mask_ptr;
+  float threshold;
+  int num_points;
+  
+  thread->m_local_mem->read(weights_op.get_symbol()->get_address(), sizeof(unsigned long long), &weights_ptr);
+  thread->m_local_mem->read(threshold_op.get_symbol()->get_address(), sizeof(float), &threshold);
+  thread->m_local_mem->read(mask_op.get_symbol()->get_address(), sizeof(unsigned long long), &mask_ptr);
+  thread->m_local_mem->read(num_points_op.get_symbol()->get_address(), sizeof(int), &num_points);
+  
+  // Debug output
+  gpgpu_sim *gpu = (gpgpu_sim*)core->get_gpu();
+  if (gpu->gpgpu_ctx->debug_tensorcore) {
+    printf("DEFORM_PCB: weights_ptr=0x%llx, threshold=%.6f, mask_ptr=0x%llx, num_points=%d\n",
+           (unsigned long long)weights_ptr, threshold, (unsigned long long)mask_ptr, num_points);
+  }
+  
+  // Store metadata in instruction for timing model
+  inst.m_deform_stage = 1;  // PCB
+  
+  // Check if functional simulation is enabled
+  if (!gpu->get_shader_config()->gpgpu_deform_functional_sim_enabled) {
+    // Dummy mode: skip functional simulation, just write zeros to mask
+    unsigned smid = thread->get_hw_sid();
+    if (whichspace(mask_ptr) == shared_space) {
+      mask_ptr = generic_to_shared(smid, mask_ptr);
+    }
+    memory_space_t mask_space = global_space;
+    memory_space *mask_mem = NULL;
+    decode_space(mask_space, thread, mask_op, mask_mem, mask_ptr);
+    
+    for (int i = 0; i < num_points; i++) {
+      uint8_t mask_bit = 0;  // All valid (no pruning)
+      mask_mem->write(mask_ptr + i, sizeof(uint8_t), &mask_bit, thread, pI);
+    }
+    inst.m_deform_valid_points = num_points;  // All points valid
+    return;
+  }
+  
+  // Address space conversion
+  unsigned smid = thread->get_hw_sid();
+  if (whichspace(weights_ptr) == shared_space) {
+    weights_ptr = generic_to_shared(smid, weights_ptr);
+  }
+  if (whichspace(mask_ptr) == shared_space) {
+    mask_ptr = generic_to_shared(smid, mask_ptr);
+  }
+  
+  // Get memory spaces
+  memory_space_t weights_space = global_space;
+  memory_space_t mask_space = global_space;
+  memory_space *weights_mem = NULL, *mask_mem = NULL;
+  decode_space(weights_space, thread, weights_op, weights_mem, weights_ptr);
+  decode_space(mask_space, thread, mask_op, mask_mem, mask_ptr);
+  
+  // PCB Functional Simulation: Weight pruning
+  int valid_count = 0;
+  
+  if (gpu->gpgpu_ctx->debug_tensorcore) {
+    printf("DEFORM_PCB: Starting weight pruning (threshold=%.6f)\n", threshold);
+  }
+  
+  for (int i = 0; i < num_points; i++) {
+    float weight;
+    weights_mem->read(weights_ptr + i * sizeof(float), sizeof(float), &weight);
+    
+    // Pruning logic: weight < threshold means invalid (low weight)
+    bool valid = (fabsf(weight) >= threshold);
+    uint8_t mask_bit = valid ? 0 : 1;  // 1 means invalid (should be skipped)
+    
+    mask_mem->write(mask_ptr + i, sizeof(uint8_t), &mask_bit, thread, pI);
+    if (valid) valid_count++;
+  }
+  
+  inst.m_deform_valid_points = valid_count;
+  
+  if (gpu->gpgpu_ctx->debug_tensorcore) {
+    printf("DEFORM_PCB: Pruning complete - valid_points=%d/%d (prune_rate=%.2f%%)\n",
+           valid_count, num_points, 100.0f * (num_points - valid_count) / num_points);
+  }
+}
+
+// Stage 2: GTC (Gated Tensor Core) - Operand Isolation
+void deform_gtc_impl(const ptx_instruction *pI, core_t *core, warp_inst_t &inst) {
+  // GTC Stage: Gated Tensor Core for operand isolation
+  // This stage runs in parallel with PCB (0 additional cycles)
+  
+  int tid = inst.warp_id() * core->get_warp_size();
+  ptx_thread_info *thread = core->get_thread_info()[tid];
+  
+  // Minimal functional implementation - operand forwarding
+  inst.m_deform_stage = 2;  // GTC
+}
+
+// Stage 3: TBC (Tile Boundary Check) - Aggregation Decision
+void deform_tbc_impl(const ptx_instruction *pI, core_t *core, warp_inst_t &inst) {
+  // TBC Stage: Tile Boundary Check for aggregation decision
+  // CUDA signature: int __deform_tbc(const float* coords, const bool* mask, int num_points,
+  //                                   int* base_x, int* base_y, int* tile_w, int* tile_h)
+  // operand[0]: return value (int - mode)
+  // operand[1]: coords (pointer)
+  // operand[2]: mask (pointer)
+  // operand[3]: num_points (int)
+  // operand[4]: base_x (pointer)
+  // operand[5]: base_y (pointer)
+  // operand[6]: tile_w (pointer)
+  // operand[7]: tile_h (pointer)
+  
+  int tid = inst.warp_id() * core->get_warp_size();
+  ptx_thread_info *thread = core->get_thread_info()[tid];
+  
+  // Store metadata
+  inst.m_deform_stage = 3;  // TBC
+  
+  const operand_info &coords_op = pI->operand_lookup(1);
+  const operand_info &mask_op = pI->operand_lookup(2);
+  const operand_info &num_points_op = pI->operand_lookup(3);
+  const operand_info &base_x_op = pI->operand_lookup(4);
+  const operand_info &base_y_op = pI->operand_lookup(5);
+  const operand_info &tile_w_op = pI->operand_lookup(6);
+  const operand_info &tile_h_op = pI->operand_lookup(7);
+  
+  unsigned long long coords_ptr, mask_ptr, base_x_ptr, base_y_ptr, tile_w_ptr, tile_h_ptr;
+  int num_points;
+  
+  thread->m_local_mem->read(coords_op.get_symbol()->get_address(), sizeof(unsigned long long), &coords_ptr);
+  thread->m_local_mem->read(mask_op.get_symbol()->get_address(), sizeof(unsigned long long), &mask_ptr);
+  thread->m_local_mem->read(num_points_op.get_symbol()->get_address(), sizeof(int), &num_points);
+  thread->m_local_mem->read(base_x_op.get_symbol()->get_address(), sizeof(unsigned long long), &base_x_ptr);
+  thread->m_local_mem->read(base_y_op.get_symbol()->get_address(), sizeof(unsigned long long), &base_y_ptr);
+  thread->m_local_mem->read(tile_w_op.get_symbol()->get_address(), sizeof(unsigned long long), &tile_w_ptr);
+  thread->m_local_mem->read(tile_h_op.get_symbol()->get_address(), sizeof(unsigned long long), &tile_h_ptr);
+  
+  // Check if functional simulation is enabled
+  gpgpu_sim *gpu = (gpgpu_sim*)core->get_gpu();
+  if (!gpu->get_shader_config()->gpgpu_deform_functional_sim_enabled) {
+    // Dummy mode: write default tile parameters
+    memory_space *output_mem = thread->m_local_mem;
+    int base_x = 0, base_y = 0, tile_w = 16, tile_h = 16;
+    int mode = 0;  // Horizontal mode
+    
+    output_mem->write(base_x_ptr, sizeof(int), &base_x, thread, pI);
+    output_mem->write(base_y_ptr, sizeof(int), &base_y, thread, pI);
+    output_mem->write(tile_w_ptr, sizeof(int), &tile_w, thread, pI);
+    output_mem->write(tile_h_ptr, sizeof(int), &tile_h, thread, pI);
+    
+    inst.m_deform_tile_mode = mode;
+    inst.m_deform_valid_points = num_points;
+    return;
+  }
+  
+  // Address space conversion
+  unsigned smid = thread->get_hw_sid();
+  if (whichspace(coords_ptr) == shared_space) {
+    coords_ptr = generic_to_shared(smid, coords_ptr);
+  }
+  if (whichspace(mask_ptr) == shared_space) {
+    mask_ptr = generic_to_shared(smid, mask_ptr);
+  }
+  
+  // Get memory spaces
+  memory_space_t coords_space = global_space;
+  memory_space_t mask_space = global_space;
+  memory_space_t output_space = local_space;  // base_x/y/w/h are local variables
+  memory_space *coords_mem = NULL, *mask_mem = NULL, *output_mem = NULL;
+  decode_space(coords_space, thread, coords_op, coords_mem, coords_ptr);
+  decode_space(mask_space, thread, mask_op, mask_mem, mask_ptr);
+  output_mem = thread->m_local_mem;  // Output parameters are in local memory
+  
+  // TBC Functional Simulation: Compute bounding box of valid points
+  float min_x = 1e9f, max_x = -1e9f;
+  float min_y = 1e9f, max_y = -1e9f;
+  int valid_count = 0;
+  
+  for (int i = 0; i < num_points; i++) {
+    uint8_t mask_bit;
+    mask_mem->read(mask_ptr + i, sizeof(uint8_t), &mask_bit);
+    
+    if (mask_bit == 0) {  // Valid point (mask=0 means not masked)
+      float x, y;
+      coords_mem->read(coords_ptr + i * 2 * sizeof(float), sizeof(float), &x);
+      coords_mem->read(coords_ptr + (i * 2 + 1) * sizeof(float), sizeof(float), &y);
+      
+      min_x = fminf(min_x, x);
+      max_x = fmaxf(max_x, x);
+      min_y = fminf(min_y, y);
+      max_y = fmaxf(max_y, y);
+      valid_count++;
+    }
+  }
+  
+  // Compute tile parameters
+  int base_x = (int)floorf(min_x);
+  int base_y = (int)floorf(min_y);
+  int tile_w = (int)ceilf(max_x) - base_x + 1;
+  int tile_h = (int)ceilf(max_y) - base_y + 1;
+  
+  // Determine access mode
+  int mode = 0;  // Default: Horizontal mode
+  if (tile_w > 16 || tile_h > 16 || valid_count == 0) {
+    mode = 3;  // DISCRETE mode (tile too large or no valid points)
+  } else if (tile_h > tile_w) {
+    mode = 1;  // VERTICAL mode
+  } else if (tile_w == tile_h) {
+    mode = 2;  // XOR mode
+  }
+  
+  // Write output parameters
+  output_mem->write(base_x_ptr, sizeof(int), &base_x, thread, pI);
+  output_mem->write(base_y_ptr, sizeof(int), &base_y, thread, pI);
+  output_mem->write(tile_w_ptr, sizeof(int), &tile_w, thread, pI);
+  output_mem->write(tile_h_ptr, sizeof(int), &tile_h, thread, pI);
+  
+  // Store metadata
+  inst.m_deform_tile_mode = mode;
+  inst.m_deform_valid_points = valid_count;
+  
+  if (gpu->gpgpu_ctx->debug_tensorcore) {
+    const char* mode_names[] = {"HORIZONTAL", "VERTICAL", "XOR", "DISCRETE"};
+    printf("DEFORM_TBC: bbox=[%.1f,%.1f]-[%.1f,%.1f], tile=%dx%d@(%d,%d), mode=%s, valid=%d\n",
+           min_x, min_y, max_x, max_y, tile_w, tile_h, base_x, base_y, 
+           mode_names[mode], valid_count);
+  }
+}
+
+// Stage 4: TMA (Tile Memory Accelerator) - Memory Load
+void deform_tma_impl(const ptx_instruction *pI, core_t *core, warp_inst_t &inst) {
+  // TMA Stage: Tile Memory Accelerator for feature map loading
+  // CUDA signature: void __deform_tma(const float* src, float* dst, int tile_w, int tile_h,
+  //                                    int src_pitch, int mode)
+  // operand[1]: src (pointer to global memory)
+  // operand[2]: dst (pointer to shared memory tile buffer)
+  // operand[3]: tile_w (int)
+  // operand[4]: tile_h (int)
+  // operand[5]: src_pitch (int)
+  // operand[6]: mode (int)
+  
+  int tid = inst.warp_id() * core->get_warp_size();
+  ptx_thread_info *thread = core->get_thread_info()[tid];
+  
+  const operand_info &src_op = pI->operand_lookup(1);
+  const operand_info &dst_op = pI->operand_lookup(2);
+  const operand_info &tile_w_op = pI->operand_lookup(3);
+  const operand_info &tile_h_op = pI->operand_lookup(4);
+  const operand_info &src_pitch_op = pI->operand_lookup(5);
+  const operand_info &mode_op = pI->operand_lookup(6);
+  
+  unsigned long long src_ptr, dst_ptr;
+  int tile_w, tile_h, src_pitch, mode;
+  
+  thread->m_local_mem->read(src_op.get_symbol()->get_address(), sizeof(unsigned long long), &src_ptr);
+  thread->m_local_mem->read(dst_op.get_symbol()->get_address(), sizeof(unsigned long long), &dst_ptr);
+  thread->m_local_mem->read(tile_w_op.get_symbol()->get_address(), sizeof(int), &tile_w);
+  thread->m_local_mem->read(tile_h_op.get_symbol()->get_address(), sizeof(int), &tile_h);
+  thread->m_local_mem->read(src_pitch_op.get_symbol()->get_address(), sizeof(int), &src_pitch);
+  thread->m_local_mem->read(mode_op.get_symbol()->get_address(), sizeof(int), &mode);
+  
+  // Store metadata
+  inst.m_deform_stage = 4;  // TMA
+  inst.m_deform_tile_mode = mode;
+  
+  gpgpu_sim *gpu = (gpgpu_sim*)core->get_gpu();
+  if (gpu->gpgpu_ctx->debug_tensorcore) {
+    printf("DEFORM_TMA: src=0x%llx, dst=0x%llx, tile=%dx%d, pitch=%d, mode=%d\n",
+           (unsigned long long)src_ptr, (unsigned long long)dst_ptr, 
+           tile_w, tile_h, src_pitch, mode);
+  }
+  
+  // Check if functional simulation is enabled
+  if (!gpu->get_shader_config()->gpgpu_deform_functional_sim_enabled) {
+    // Dummy mode: write zeros to dst tile buffer
+    unsigned smid = thread->get_hw_sid();
+    if (whichspace(dst_ptr) == shared_space) {
+      dst_ptr = generic_to_shared(smid, dst_ptr);
+    }
+    memory_space_t dst_space = shared_space;
+    memory_space *dst_mem = NULL;
+    decode_space(dst_space, thread, dst_op, dst_mem, dst_ptr);
+    
+    const int dst_pitch = 17;
+    for (int row = 0; row < tile_h; row++) {
+      for (int col = 0; col < tile_w; col++) {
+        float zero = 0.0f;
+        addr_t dst_addr = dst_ptr + (row * dst_pitch + col) * sizeof(float);
+        dst_mem->write(dst_addr, sizeof(float), &zero, thread, pI);
+      }
+    }
+    inst.m_deform_mem_accesses = tile_w * tile_h;
+    return;
+  }
+  
+  // Address space conversion
+  unsigned smid = thread->get_hw_sid();
+  if (whichspace(src_ptr) == global_space) {
+    // src is in global memory (expected)
+  } else if (whichspace(src_ptr) == shared_space) {
+    src_ptr = generic_to_shared(smid, src_ptr);
+  }
+  
+  if (whichspace(dst_ptr) == shared_space) {
+    dst_ptr = generic_to_shared(smid, dst_ptr);
+  }
+  
+  // Get memory spaces
+  memory_space_t src_space = global_space;
+  memory_space_t dst_space = shared_space;
+  memory_space *src_mem = NULL, *dst_mem = NULL;
+  decode_space(src_space, thread, src_op, src_mem, src_ptr);
+  decode_space(dst_space, thread, dst_op, dst_mem, dst_ptr);
+  
+  // TMA Functional Simulation: Load tile_w × tile_h tile from global to shared memory
+  // Destination uses pitch=17 to avoid bank conflicts (hardware feature)
+  const int dst_pitch = 17;
+  
+  // Generate memory addresses for timing simulation
+  std::vector<new_addr_type> mem_addrs;
+  
+  for (int row = 0; row < tile_h; row++) {
+    for (int col = 0; col < tile_w; col++) {
+      addr_t src_addr = src_ptr + (row * src_pitch + col) * sizeof(float);
+      addr_t dst_addr = dst_ptr + (row * dst_pitch + col) * sizeof(float);
+      mem_addrs.push_back(src_addr);
+      
+      // Functional copy
+      float value;
+      src_mem->read(src_addr, sizeof(float), &value);
+      dst_mem->write(dst_addr, sizeof(float), &value, thread, pI);
+    }
+  }
+  
+  // Set up memory transactions for timing model
+  int total_accesses = (int)mem_addrs.size();
+  int batch_size = std::min(total_accesses, (int)MAX_ACCESSES_PER_INSN_PER_THREAD);
+  new_addr_type batch_addrs[MAX_ACCESSES_PER_INSN_PER_THREAD];
+  
+  for (int i = 0; i < batch_size; i++) {
+    batch_addrs[i] = mem_addrs[i];
+  }
+  for (int i = batch_size; i < MAX_ACCESSES_PER_INSN_PER_THREAD; i++) {
+    batch_addrs[i] = 0;
+  }
+  
+  inst.set_addr(0, batch_addrs, batch_size);
+  inst.space = global_space;
+  inst.data_size = 4;  // 32-bit float
+  inst.memory_op = memory_load;
+  
+  // Store metadata
+  inst.m_deform_mem_accesses = total_accesses;
+  
+  if (gpu->gpgpu_ctx->debug_tensorcore) {
+    printf("DEFORM_TMA: Loaded %dx%d tile (%d accesses), mem_txns=%d\n",
+           tile_w, tile_h, total_accesses, batch_size);
+  }
+}
+
+// Stage 5: INTERP (Interpolation) - Bilinear Interpolation
+void deform_interp_impl(const ptx_instruction *pI, core_t *core, warp_inst_t &inst) {
+  // INTERP Stage: Bilinear interpolation computation
+  // CUDA signature: float __deform_interp(const float* tile_buffer, float local_x, 
+  //                                        float local_y, int mode)
+  // operand[0]: return value (float - interpolated result)
+  // operand[1]: tile_buffer (pointer to shared memory)
+  // operand[2]: local_x (float)
+  // operand[3]: local_y (float)
+  // operand[4]: mode (int)
+  
+  int tid = inst.warp_id() * core->get_warp_size();
+  ptx_thread_info *thread = core->get_thread_info()[tid];
+  gpgpu_sim *gpu = (gpgpu_sim*)core->get_gpu();
+  
+  const operand_info &tile_buffer_op = pI->operand_lookup(1);
+  const operand_info &local_x_op = pI->operand_lookup(2);
+  const operand_info &local_y_op = pI->operand_lookup(3);
+  const operand_info &mode_op = pI->operand_lookup(4);
+  
+  unsigned long long tile_buffer_ptr;
+  float local_x, local_y;
+  int mode;
+  
+  thread->m_local_mem->read(tile_buffer_op.get_symbol()->get_address(), sizeof(unsigned long long), &tile_buffer_ptr);
+  thread->m_local_mem->read(local_x_op.get_symbol()->get_address(), sizeof(float), &local_x);
+  thread->m_local_mem->read(local_y_op.get_symbol()->get_address(), sizeof(float), &local_y);
+  thread->m_local_mem->read(mode_op.get_symbol()->get_address(), sizeof(int), &mode);
+  
+  // Store metadata
+  inst.m_deform_stage = 5;  // INTERP
+  
+  // Check if functional simulation is enabled
+  if (gpu->gpgpu_ctx->debug_tensorcore) {
+    printf("DEFORM_INTERP: tile_buffer=0x%llx, local=(%.3f,%.3f), mode=%d\n",
+           (unsigned long long)tile_buffer_ptr, local_x, local_y, mode);
+  }
+  if (!gpu->get_shader_config()->gpgpu_deform_functional_sim_enabled) {
+    // Dummy mode: return a dummy interpolation result
+    float result = 0.5f;  // Dummy value
+    inst.m_deform_interp_result = result;
+    return;
+  }
+  
+  // Address space conversion
+  unsigned smid = thread->get_hw_sid();
+  if (whichspace(tile_buffer_ptr) == shared_space) {
+    tile_buffer_ptr = generic_to_shared(smid, tile_buffer_ptr);
+  }
+  
+  // Get memory space
+  memory_space_t tile_space = shared_space;
+  memory_space *tile_mem = NULL;
+  decode_space(tile_space, thread, tile_buffer_op, tile_mem, tile_buffer_ptr);
+  
+  // INTERP Functional Simulation: Bilinear interpolation
+  // tile_buffer has pitch=17 to avoid bank conflicts
+  const int tile_pitch = 17;
+  
+  // Compute interpolation weights
+  int x0 = (int)floorf(local_x);
+  int y0 = (int)floorf(local_y);
+  int x1 = x0 + 1;
+  int y1 = y0 + 1;
+  
+  float fx = local_x - x0;
+  float fy = local_y - y0;
+  
+  // Read 4 corner values from tile buffer
+  float v00 = 0.0f, v01 = 0.0f, v10 = 0.0f, v11 = 0.0f;
+  
+  if (x0 >= 0 && y0 >= 0 && x0 < 16 && y0 < 16) {
+    addr_t addr00 = tile_buffer_ptr + (y0 * tile_pitch + x0) * sizeof(float);
+    tile_mem->read(addr00, sizeof(float), &v00);
+  }
+  if (x1 >= 0 && y0 >= 0 && x1 < 16 && y0 < 16) {
+    addr_t addr01 = tile_buffer_ptr + (y0 * tile_pitch + x1) * sizeof(float);
+    tile_mem->read(addr01, sizeof(float), &v01);
+  }
+  if (x0 >= 0 && y1 >= 0 && x0 < 16 && y1 < 16) {
+    addr_t addr10 = tile_buffer_ptr + (y1 * tile_pitch + x0) * sizeof(float);
+    tile_mem->read(addr10, sizeof(float), &v10);
+  }
+  if (x1 >= 0 && y1 >= 0 && x1 < 16 && y1 < 16) {
+    addr_t addr11 = tile_buffer_ptr + (y1 * tile_pitch + x1) * sizeof(float);
+    tile_mem->read(addr11, sizeof(float), &v11);
+  }
+  
+  // Bilinear interpolation: result = (1-fx)*(1-fy)*v00 + fx*(1-fy)*v01 + (1-fx)*fy*v10 + fx*fy*v11
+  float result = (1.0f - fx) * (1.0f - fy) * v00 + fx * (1.0f - fy) * v01 + 
+                 (1.0f - fx) * fy * v10 + fx * fy * v11;
+  
+  // Store metadata
+  inst.m_deform_interp_result = result;  // Store for debugging
+  
+  if (gpu->gpgpu_ctx->debug_tensorcore) {
+    printf("DEFORM_INTERP: corners=[%.3f,%.3f,%.3f,%.3f], weights=(%.3f,%.3f), result=%.6f\n",
+           v00, v01, v10, v11, fx, fy, result);
+  }
+  
+  // For functional simulation, we can skip storing the return value in register
+  // as it will be used immediately in the kernel
 }
 
 void ldu_impl(const ptx_instruction *pI, ptx_thread_info *thread) {

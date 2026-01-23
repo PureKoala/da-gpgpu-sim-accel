@@ -1,3 +1,64 @@
+## 0. Baseline + Optimized（更新版计划：CUDA kernel vs 伪指令）
+
+**背景对齐**：已将部分模块迁移到 GPGPU-Sim 内部（模拟硬件实现）。后续代码修改计划按“**CUDA kernel 驱动** + **伪指令建模硬件**”两条线明确划分。
+
+### 0.1 必须由 CUDA kernel 实现的部分
+
+1. **Baseline 采样聚合 kernel（纯软件路径）**
+      - **职责**：完整实现 `sampling_locs + attn_weights + value_maps -> output` 的标量（或向量）双线性采样与累加。
+      - **原因**：Baseline 需要可对照的“真实软件实现”结果。
+      - **建议文件**：
+        - `deAttn/src/deform_attn/cuda/ms_deform_attn_im2col_cuda.cuh`（采样实现）
+        - `deAttn/src/deform_attn/cuda/ms_deform_attn_cuda_kernel.cu`（wrapper/launch）
+
+2. **Optimized 版本的“驱动 kernel”（线程映射 + 控制流）**
+      - **职责**：
+        - block/warp/thread mapping（16 queries/block + chunking）
+        - PCB 结果的谓词化与 per-query reduce
+        - Discrete 路径的 fallback（必要时仍在 kernel 内做 `bilinear_sample_global()`）
+      - **原因**：即使硬件模块在模拟中实现，kernel 仍需组织数据流与控制流。
+
+3. **Host 侧 glue 与验证**
+      - **职责**：
+        - 初始化 `sampling_locs/attn_weights/value_maps` 或对比用数据
+        - 结果校验、统计输出
+      - **原因**：对照 baseline/optimized correctness 与性能统计需要完整驱动程序。
+
+### 0.2 应使用 GPGPU-Sim 伪指令（硬件模拟）的部分
+
+1. **PCB（Point-wise Clamping / Pruning）**
+      - **建议伪指令**：`deform.pcb`（输入权重 `w` + threshold，输出 predicate）
+      - **作用**：统计剪枝比例、施加固定延迟、模拟硬件剪枝单元。
+
+2. **TBC（Tile Block Classification / 决策）**
+      - **建议伪指令**：`deform.tbc`（输入有效点 bbox/coords，输出 `mode/base_x/base_y`）
+      - **作用**：模拟 tile/Discrete 决策逻辑与开销。
+
+3. **TMA（Tile Memory Access / Tile 载入）**
+      - **建议伪指令**：`deform.tma`（输入 level + base 坐标，输出 tile buffer 就绪）
+      - **作用**：模拟 tile 载入带宽与延迟（smem/缓存等）。
+
+4. **Interpolation（双线性插值）**
+      - **建议伪指令**：`deform.interp`（输入 4 邻域 + frac，输出 v）
+      - **作用**：模拟片上插值单元延迟；减少 kernel 中显式四邻域加载。
+
+> 备注：若 Discrete 路径仍采用 kernel 内 `bilinear_sample_global()`，则**不走** `deform.tma/interp` 伪指令，仅在 Tile 路径走伪指令。
+
+### 0.3 阶段对应关系（与 [DevDocs/Orient.md](DevDocs/Orient.md) 对齐）
+
+| 阶段 | 作用 | CUDA kernel | 伪指令 |
+|---|---|---|---|
+| Stage I PCB | 点级剪枝 | 谓词化/控制流 | `deform.pcb` |
+| Stage II GTC | 隔离无效操作数 | kernel 内 | （可省略） |
+| Stage III TBC | Tile/Discrete 决策 | kernel 调用 | `deform.tbc` |
+| Stage IV TMA | Tile 载入 | kernel 调用 | `deform.tma` |
+| Stage V Interp | 双线性插值 | kernel 调用 | `deform.interp` |
+| Reduce/Writeback | per-query 归约 | kernel 内 | （无） |
+
+---
+
+以下为原“预测阶段 INT8 Tensor Core”计划（保留不变，作为并行路线）：
+
 这是一个非常好的优化方向。安培 (Ampere) 架构的 INT8 Tensor Core 提供了比 WMMA (Volta/Turing) 更灵活的矩阵形状，这使得您“切分K”的想法更具现实意义和必要性。
 
 RTX 3070 上的安培 Tensor Core (Compute Capability 8.6) 支持 `mma.sync.aligned.m16n8k16.row.col.s32.s8.s8.s32` 和 `mma.sync.aligned.m16n8k32.row.col.s32.s8.s8.s32` 这样的指令。

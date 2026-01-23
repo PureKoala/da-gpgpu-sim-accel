@@ -43,6 +43,12 @@ typedef void *yyscan_t;
 // Forward declaration for FMR timing model function
 void ld_sample_fmr_impl(const ptx_instruction *pI, core_t *core, warp_inst_t &inst);
 
+// Forward declarations for Deformable Attention timing model functions
+void deform_pcb_impl(const ptx_instruction *pI, core_t *core, warp_inst_t &inst);
+void deform_tbc_impl(const ptx_instruction *pI, core_t *core, warp_inst_t &inst);
+void deform_tma_impl(const ptx_instruction *pI, core_t *core, warp_inst_t &inst);
+void deform_interp_impl(const ptx_instruction *pI, core_t *core, warp_inst_t &inst);
+
 #include <sstream>
 #include "../../libcuda/gpgpu_context.h"
 #include "../abstract_hardware_model.h"
@@ -1879,11 +1885,54 @@ void ptx_thread_info::ptx_exec_inst(warp_inst_t &inst, unsigned lane_id) {
             //    (no special PC sync needed - all threads call ptx_exec_inst)
             core_t *core = get_core();
             ld_sample_fmr_impl(pI, core, inst);
-            
+
             // Mark as FMR pseudo call: skip normal opcode switch
             is_fmr_call = true;
             skip = true;  // skip generic memory_op/address overwrite & assertion block
             // Ensure we restore original pI pointer context
+            delete pJ;
+            pI = pI_saved;
+          }
+          // ========================================================================
+          // Deformable Attention CALL Interception
+          // ========================================================================
+          else if (fname.find("deform_pcb") != std::string::npos) {
+            // Deformable Attention PCB pseudo-CALL handling
+            core_t *core = get_core();
+            deform_pcb_impl(pI, core, inst);
+
+            is_fmr_call = true;  // Reuse the flag to skip normal processing
+            skip = true;
+            delete pJ;
+            pI = pI_saved;
+          }
+          else if (fname.find("deform_tbc") != std::string::npos) {
+            // Deformable Attention TBC pseudo-CALL handling
+            core_t *core = get_core();
+            deform_tbc_impl(pI, core, inst);
+
+            is_fmr_call = true;
+            skip = true;
+            delete pJ;
+            pI = pI_saved;
+          }
+          else if (fname.find("deform_tma") != std::string::npos) {
+            // Deformable Attention TMA pseudo-CALL handling
+            core_t *core = get_core();
+            deform_tma_impl(pI, core, inst);
+
+            is_fmr_call = true;
+            skip = true;
+            delete pJ;
+            pI = pI_saved;
+          }
+          else if (fname.find("deform_interp") != std::string::npos) {
+            // Deformable Attention Interpolation pseudo-CALL handling
+            core_t *core = get_core();
+            deform_interp_impl(pI, core, inst);
+
+            is_fmr_call = true;
+            skip = true;
             delete pJ;
             pI = pI_saved;
           }

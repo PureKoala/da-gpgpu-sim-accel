@@ -136,7 +136,12 @@ enum uarch_op_t {
   SPECIALIZED_UNIT_6_OP,
   SPECIALIZED_UNIT_7_OP,
   SPECIALIZED_UNIT_8_OP,
-  FMR_SAMPLE_OP  // FMR bilinear sampling operation for Deformable Attention
+  FMR_SAMPLE_OP,  // FMR bilinear sampling operation for Deformable Attention
+  DEFORM_PCB_OP,  // Deformable Attention Pre-Check Block (weight pruning)
+  DEFORM_GTC_OP,  // Deformable Attention Gated Tensor Core (operand isolation)
+  DEFORM_TBC_OP,  // Deformable Attention Tile Boundary Check (tile aggregation)
+  DEFORM_TMA_OP,  // Deformable Attention Tile Memory Accelerator (tile load)
+  DEFORM_INTERP_OP  // Deformable Attention Interpolation (bilinear interpolation)
 };
 typedef enum uarch_op_t op_type;
 
@@ -1081,6 +1086,17 @@ class warp_inst_t : public inst_t {
     m_fmr_stride = 0;
     m_fmr_gmem_base = 0;
     m_fmr_smem_base = 0;
+    
+    // Deformable Attention:
+    m_deform_stage = 0;
+    m_deform_valid_points = 0;
+    m_deform_direct_count = 0;
+    m_deform_cached_count = 0;
+    m_deform_compute_count = 0;
+    m_deform_mem_accesses = 0;
+    m_deform_interp_ops = 0;
+    m_deform_tile_mode = 0;
+    m_deform_interp_result = 0.0f;
   }
   warp_inst_t(const core_config *config) {
     m_uid = 0;
@@ -1109,6 +1125,17 @@ class warp_inst_t : public inst_t {
     m_fmr_stride = 0;
     m_fmr_gmem_base = 0;
     m_fmr_smem_base = 0;
+    
+    // Deformable Attention:
+    m_deform_stage = 0;
+    m_deform_valid_points = 0;
+    m_deform_direct_count = 0;
+    m_deform_cached_count = 0;
+    m_deform_compute_count = 0;
+    m_deform_mem_accesses = 0;
+    m_deform_interp_ops = 0;
+    m_deform_tile_mode = 0;
+    m_deform_interp_result = 0.0f;
   }
   virtual ~warp_inst_t() {}
 
@@ -1315,6 +1342,17 @@ class warp_inst_t : public inst_t {
   int m_fmr_stride;       // stride for GMEM access (source image width)
   addr_t m_fmr_gmem_base; // global memory base address
   addr_t m_fmr_smem_base; // shared memory base address
+  
+  // Deformable Attention: pipeline stage metadata for functional simulation
+  int m_deform_stage;            // current pipeline stage (1=PCB, 2=GTC, 3=TBC, 4=TMA, 5=INTERP)
+  int m_deform_valid_points;     // PCB: number of valid sampling points after pruning
+  int m_deform_direct_count;     // TBC: count of direct memory access points
+  int m_deform_cached_count;     // TBC: count of cached access points
+  int m_deform_compute_count;    // TBC: count of computed interpolation points
+  int m_deform_mem_accesses;     // TMA: number of memory accesses generated
+  int m_deform_interp_ops;       // INTERP: number of interpolation operations
+  int m_deform_tile_mode;        // TBC/TMA: tile access mode (0=Horizontal, 1=Vertical, 2=XOR, 3=Discrete)
+  float m_deform_interp_result;  // INTERP: interpolation result for debugging
 };
 
 void move_warp(warp_inst_t *&dst, warp_inst_t *&src);

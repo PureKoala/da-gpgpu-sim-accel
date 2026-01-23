@@ -627,6 +627,7 @@ class gpgpu_sim : public gpgpu_t {
   void decrement_kernel_latency();
 
   const gpgpu_sim_config &get_config() const { return m_config; }
+  const shader_core_config *get_shader_config() const { return m_shader_config; }
   void gpu_print_stat(unsigned long long streamID);
   void dump_pipeline(int mask, int s, int m) const;
 

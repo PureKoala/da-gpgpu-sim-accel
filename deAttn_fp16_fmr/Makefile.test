@@ -1,0 +1,52 @@
+# Makefile for Deformable Attention Test
+# This Makefile is for testing the Deformable Attention implementation
+
+# CUDA Compiler
+NVCC = nvcc
+
+# Compiler flags
+NVCCFLAGS = -arch=sm_75 -O3 -std=c++11
+NVCCFLAGS += -I../src/cuda-sim
+NVCCFLAGS += -I../src/gpgpu-sim
+NVCCFLAGS += -I../src
+
+# Linker flags
+LDFLAGS = -lcudart
+
+# Source files
+TEST_SRC = test_deform_attn.cu
+TEST_OBJ = test_deform_attn.o
+TEST_EXE = test_deform_attn
+
+# Default target
+all: $(TEST_EXE)
+
+# Compile test program
+$(TEST_EXE): $(TEST_SRC)
+	@echo "Compiling test program..."
+	$(NVCC) $(NVCCFLAGS) -c $(TEST_SRC) -o $(TEST_OBJ)
+	$(NVCC) $(NVCCFLAGS) $(TEST_OBJ) -o $(TEST_EXE) $(LDFLAGS)
+	@echo "Build complete: $(TEST_EXE)"
+
+# Run test (requires GPGPU-Sim environment)
+run: $(TEST_EXE)
+	@echo "Running test (requires GPGPU-Sim environment)..."
+	@echo "Note: This test is designed to run with GPGPU-Sim"
+	@echo "      Set up GPGPU-Sim environment first:"
+	@echo "      source setup_environment"
+	@echo "      cp configs/QuadroFX5800/* ."
+	@echo "      Then run: ./$(TEST_EXE)"
+
+# Clean
+clean:
+	rm -f $(TEST_OBJ) $(TEST_EXE) *.o
+
+# Help
+help:
+	@echo "Available targets:"
+	@echo "  make          - Build test program"
+	@echo "  make run      - Run test (requires GPGPU-Sim environment)"
+	@echo "  make clean    - Clean build artifacts"
+	@echo "  make help     - Show this help message"
+
+.PHONY: all run clean help

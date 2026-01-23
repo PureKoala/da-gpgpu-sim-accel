@@ -641,6 +641,43 @@ void shader_core_config::reg_options(class OptionParser *opp) {
       opp, "-gpgpu_operand_collector_num_out_ports_fmr", OPT_UINT32,
       &gpgpu_operand_collector_num_out_ports_fmr,
       "Number of FMR operand collector output ports (default=1)", "1");
+
+  // Deformable Attention configuration
+  option_parser_register(opp, "-gpgpu_deform_attn_avail", OPT_UINT32,
+                         &gpgpu_deform_attn_avail,
+                         "Deformable Attention Available (default=0)", "0");
+  option_parser_register(opp, "-gpgpu_num_deform_units", OPT_UINT32,
+                         &gpgpu_num_deform_units,
+                         "Number of DeformAttn units (default=1)", "0");
+  option_parser_register(opp, "-gpgpu_deform_functional_sim_enabled", OPT_UINT32,
+                         &gpgpu_deform_functional_sim_enabled,
+                         "Enable functional simulation in deform_*_impl() (0=dummy, 1=full simulation, default=1)", "0");
+  option_parser_register(opp, "-gpgpu_deform_pcb_latency", OPT_UINT32,
+                         &deform_pcb_latency,
+                         "PCB latency in cycles (default=1)", "1");
+  option_parser_register(opp, "-gpgpu_deform_tbc_phase1_latency", OPT_UINT32,
+                         &deform_tbc_phase1_latency,
+                         "TBC Phase 1 latency (default=4)", "4");
+  option_parser_register(opp, "-gpgpu_deform_tbc_phase2_latency", OPT_UINT32,
+                         &deform_tbc_phase2_latency,
+                         "TBC Phase 2 latency (default=3)", "3");
+  option_parser_register(opp, "-gpgpu_deform_tma_latency", OPT_UINT32,
+                         &deform_tma_latency,
+                         "TMA latency (default=16)", "16");
+  option_parser_register(opp, "-gpgpu_deform_storage_latency", OPT_UINT32,
+                         &deform_storage_latency,
+                         "Storage latency (default=6)", "6");
+  option_parser_register(opp, "-gpgpu_deform_interp_latency", OPT_UINT32,
+                         &deform_interp_latency,
+                         "Interpolation latency (default=3)", "3");
+  option_parser_register(
+      opp, "-gpgpu_operand_collector_num_in_ports_deform", OPT_UINT32,
+      &gpgpu_operand_collector_num_in_ports_deform,
+      "Number of DeformAttn operand collector input ports (default=1)", "1");
+  option_parser_register(
+      opp, "-gpgpu_operand_collector_num_out_ports_deform", OPT_UINT32,
+      &gpgpu_operand_collector_num_out_ports_deform,
+      "Number of DeformAttn operand collector output ports (default=1)", "1");
   option_parser_register(
       opp, "-gpgpu_num_mem_units", OPT_UINT32, &gpgpu_num_mem_units,
       "Number if ldst units (default=1) WARNING: not hooked up to anything",

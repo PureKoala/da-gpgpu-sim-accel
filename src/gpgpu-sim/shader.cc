@@ -211,7 +211,8 @@ void shader_core_ctx::create_schedulers() {
             &m_pipeline_reg[ID_OC_SP], &m_pipeline_reg[ID_OC_DP],
             &m_pipeline_reg[ID_OC_SFU], &m_pipeline_reg[ID_OC_INT],
             &m_pipeline_reg[ID_OC_TENSOR_CORE], &m_pipeline_reg[ID_OC_FMR],
-            m_specilized_dispatch_reg, &m_pipeline_reg[ID_OC_MEM], i));
+            &m_pipeline_reg[ID_OC_DEFORM], m_specilized_dispatch_reg,
+            &m_pipeline_reg[ID_OC_MEM], i));
         break;
       case CONCRETE_SCHEDULER_TWO_LEVEL_ACTIVE:
         schedulers.push_back(new two_level_active_scheduler(
@@ -219,7 +220,8 @@ void shader_core_ctx::create_schedulers() {
             &m_pipeline_reg[ID_OC_SP], &m_pipeline_reg[ID_OC_DP],
             &m_pipeline_reg[ID_OC_SFU], &m_pipeline_reg[ID_OC_INT],
             &m_pipeline_reg[ID_OC_TENSOR_CORE], &m_pipeline_reg[ID_OC_FMR],
-            m_specilized_dispatch_reg, &m_pipeline_reg[ID_OC_MEM], i, 
+            &m_pipeline_reg[ID_OC_DEFORM], m_specilized_dispatch_reg,
+            &m_pipeline_reg[ID_OC_MEM], i, 
             m_config->gpgpu_scheduler_string));
         break;
       case CONCRETE_SCHEDULER_GTO:
@@ -228,7 +230,8 @@ void shader_core_ctx::create_schedulers() {
             &m_pipeline_reg[ID_OC_SP], &m_pipeline_reg[ID_OC_DP],
             &m_pipeline_reg[ID_OC_SFU], &m_pipeline_reg[ID_OC_INT],
             &m_pipeline_reg[ID_OC_TENSOR_CORE], &m_pipeline_reg[ID_OC_FMR],
-            m_specilized_dispatch_reg, &m_pipeline_reg[ID_OC_MEM], i));
+            &m_pipeline_reg[ID_OC_DEFORM], m_specilized_dispatch_reg,
+            &m_pipeline_reg[ID_OC_MEM], i));
         break;
       case CONCRETE_SCHEDULER_RRR:
         schedulers.push_back(new rrr_scheduler(
@@ -236,7 +239,8 @@ void shader_core_ctx::create_schedulers() {
             &m_pipeline_reg[ID_OC_SP], &m_pipeline_reg[ID_OC_DP],
             &m_pipeline_reg[ID_OC_SFU], &m_pipeline_reg[ID_OC_INT],
             &m_pipeline_reg[ID_OC_TENSOR_CORE], &m_pipeline_reg[ID_OC_FMR],
-            m_specilized_dispatch_reg, &m_pipeline_reg[ID_OC_MEM], i));
+            &m_pipeline_reg[ID_OC_DEFORM], m_specilized_dispatch_reg,
+            &m_pipeline_reg[ID_OC_MEM], i));
         break;
       case CONCRETE_SCHEDULER_OLDEST_FIRST:
         schedulers.push_back(new oldest_scheduler(
@@ -244,7 +248,8 @@ void shader_core_ctx::create_schedulers() {
             &m_pipeline_reg[ID_OC_SP], &m_pipeline_reg[ID_OC_DP],
             &m_pipeline_reg[ID_OC_SFU], &m_pipeline_reg[ID_OC_INT],
             &m_pipeline_reg[ID_OC_TENSOR_CORE], &m_pipeline_reg[ID_OC_FMR],
-            m_specilized_dispatch_reg, &m_pipeline_reg[ID_OC_MEM], i));
+            &m_pipeline_reg[ID_OC_DEFORM], m_specilized_dispatch_reg,
+            &m_pipeline_reg[ID_OC_MEM], i));
         break;
       case CONCRETE_SCHEDULER_WARP_LIMITING:
         schedulers.push_back(new swl_scheduler(
@@ -252,7 +257,8 @@ void shader_core_ctx::create_schedulers() {
             &m_pipeline_reg[ID_OC_SP], &m_pipeline_reg[ID_OC_DP],
             &m_pipeline_reg[ID_OC_SFU], &m_pipeline_reg[ID_OC_INT],
             &m_pipeline_reg[ID_OC_TENSOR_CORE], &m_pipeline_reg[ID_OC_FMR],
-            m_specilized_dispatch_reg, &m_pipeline_reg[ID_OC_MEM], i, 
+            &m_pipeline_reg[ID_OC_DEFORM], m_specilized_dispatch_reg,
+            &m_pipeline_reg[ID_OC_MEM], i, 
             m_config->gpgpu_scheduler_string));
         break;
       default:
@@ -298,6 +304,10 @@ void shader_core_ctx::create_exec_pipeline() {
     if (m_config->gpgpu_fmr_avail) {
       in_ports.push_back(&m_pipeline_reg[ID_OC_FMR]);
       out_ports.push_back(&m_pipeline_reg[OC_EX_FMR]);
+    }
+    if (m_config->gpgpu_deform_attn_avail) {
+      in_ports.push_back(&m_pipeline_reg[ID_OC_DEFORM]);
+      out_ports.push_back(&m_pipeline_reg[OC_EX_DEFORM]);
     }
     if (m_config->gpgpu_num_dp_units > 0) {
       in_ports.push_back(&m_pipeline_reg[ID_OC_DP]);
@@ -418,9 +428,9 @@ void shader_core_ctx::create_exec_pipeline() {
   m_num_function_units =
       m_config->gpgpu_num_sp_units + m_config->gpgpu_num_dp_units +
       m_config->gpgpu_num_sfu_units + m_config->gpgpu_num_tensor_core_units +
-      m_config->gpgpu_num_fmr_units + m_config->gpgpu_num_int_units + 
-      m_config->m_specialized_unit_num +
-      1;  // sp_unit, sfu, dp, tensor, fmr, int, ldst_unit
+      m_config->gpgpu_num_fmr_units + m_config->gpgpu_num_deform_units +
+      m_config->gpgpu_num_int_units + m_config->m_specialized_unit_num +
+      1;  // sp_unit, sfu, dp, tensor, fmr, deform_attn, int, ldst_unit
   // m_dispatch_port = new enum pipeline_stage_name_t[ m_num_function_units ];
   // m_issue_port = new enum pipeline_stage_name_t[ m_num_function_units ];
 
@@ -461,6 +471,9 @@ void shader_core_ctx::create_exec_pipeline() {
     m_dispatch_port.push_back(ID_OC_FMR);
     m_issue_port.push_back(OC_EX_FMR);
   }
+
+  // NOTE: Deformable Attention uses Function Call interception (no dedicated execution units)
+  // All DA operations are handled in cuda-sim.cc via __deform_* function name matching
 
   for (unsigned j = 0; j < m_config->m_specialized_unit.size(); j++) {
     for (unsigned k = 0; k < m_config->m_specialized_unit[j].num_units; k++) {
@@ -1523,6 +1536,15 @@ void scheduler_unit::cycle() {
                   warp_inst_issued = true;
                   previous_issued_inst_exec_type = exec_unit_type_t::FMR;
                 }
+              // NOTE: Deformable Attention uses ONLY Function Call interception
+              // No pseudo-instruction or pipeline dispatch needed
+              // (CUDA compiler cannot recognize custom PTX instructions)
+              // All DA operations are handled in cuda-sim.cc via function name matching
+              //
+              // } else if ((pI->op == DEFORM_PCB_OP || ...) {
+              //   // This code path is DISABLED because DEFORM_*_OP are not defined
+              //   // in opcodes.def (CUDA compilation constraint)
+              // }
               } else if ((pI->op >= SPEC_UNIT_START_ID) &&
                          !(diff_exec_units &&
                            previous_issued_inst_exec_type ==
@@ -1723,12 +1745,12 @@ swl_scheduler::swl_scheduler(shader_core_stats *stats, shader_core_ctx *shader,
                              register_set *sp_out, register_set *dp_out,
                              register_set *sfu_out, register_set *int_out,
                              register_set *tensor_core_out,
-                             register_set *fmr_out,
+                             register_set *fmr_out, register_set *deform_out,
                              std::vector<register_set *> &spec_cores_out,
                              register_set *mem_out, int id, char *config_string)
     : scheduler_unit(stats, shader, scoreboard, simt, warp, sp_out, dp_out,
-                     sfu_out, int_out, tensor_core_out, fmr_out, spec_cores_out,
-                     mem_out, id) {
+                     sfu_out, int_out, tensor_core_out, fmr_out, deform_out,
+                     spec_cores_out, mem_out, id) {
   unsigned m_prioritization_readin;
   int ret = sscanf(config_string, "warp_limiting:%d:%d",
                    &m_prioritization_readin, &m_num_warps_to_limit);
@@ -2489,6 +2511,62 @@ void fmr_unit::issue(register_set &source_reg) {
 }
 
 void fmr_unit::active_lanes_in_pipeline() {
+  active_insts_in_pipeline = 0;
+  for (unsigned stage = 0; (stage + 1) < m_pipeline_depth; stage++) {
+    if (!m_pipeline_reg[stage]->empty())
+      active_insts_in_pipeline += m_pipeline_reg[stage]->active_count();
+  }
+}
+
+// ============================================================================
+// Deformable Attention Execution Unit Implementation
+// ============================================================================
+
+deform_attn_exec_unit::deform_attn_exec_unit(register_set *result_port,
+                                             const shader_core_config *config,
+                                             shader_core_ctx *core,
+                                             unsigned issue_reg_id)
+    : pipelined_simd_unit(result_port, config, config->deform_attn_latency,
+                          core, issue_reg_id) {
+  m_name = "DEFORM_ATTN";
+}
+
+void deform_attn_exec_unit::issue(register_set &source_reg) {
+  warp_inst_t **ready_reg =
+      source_reg.get_ready(m_config->sub_core_model, m_issue_reg_id);
+
+  // Deformable Attention operations are specialized compute operations
+  // Similar to tensor_core, they use fixed-latency pipeline model
+  (*ready_reg)->op_pipe = SPECIALIZED__OP;
+  
+  // Deformable Attention Latency Model:
+  //
+  // The deform_attn_latency configuration option specifies the total
+  // end-to-end latency for the 5-stage pipeline:
+  //   Stage 1: PCB (Pre-Check Block) - weight pruning          : 1 cycle
+  //   Stage 2: GTC (Gated Tensor Core) - operand isolation     : 0 cycle (parallel)
+  //   Stage 3: TBC (Tile Boundary Check) - aggregation decision: 4-7 cycles
+  //   Stage 4: TMA & Storage - tile memory load                : ~22 cycles
+  //   Stage 5: Interpolation - bilinear interpolation          : 3 cycles
+  //
+  // Default total latency: ~30-35 cycles (configurable)
+  //
+  // This follows the CUDA function call interception approach:
+  //   1. Kernel calls __deform_pcb(), __deform_tbc(), etc.
+  //   2. cuda-sim.cc intercepts these calls (see deform_pcb_impl, etc.)
+  //   3. Function model in deform_attn_unit.cc executes
+  //   4. Fixed latency added here via pipelined_simd_unit
+  //
+  // Note: Unlike FMR which goes through memory system, DeformAttn is
+  // a pure compute accelerator with deterministic latency
+  
+  // Statistics collection
+  m_core->incsfu_stat(m_core->get_config()->warp_size, (*ready_reg)->latency);
+  
+  pipelined_simd_unit::issue(source_reg);
+}
+
+void deform_attn_exec_unit::active_lanes_in_pipeline() {
   active_insts_in_pipeline = 0;
   for (unsigned stage = 0; (stage + 1) < m_pipeline_depth; stage++) {
     if (!m_pipeline_reg[stage]->empty())
@@ -3760,6 +3838,15 @@ void shader_core_config::set_pipeline_latency() {
   max_int_latency = std::max(int_latency[1], int_latency[5]);
   max_dp_latency = dp_latency[1];
   max_tensor_core_latency = tensor_latency;
+
+  // Calculate Deformable Attention total latency from individual stage latencies
+  // This follows the 5-stage pipeline architecture:
+  //   PCB (1c) → GTC (0c, parallel) → TBC (4-7c) → TMA & Storage (~22c) → Interp (3c)
+  deform_attn_latency = deform_pcb_latency +
+                        (deform_tbc_phase1_latency + deform_tbc_phase2_latency) +
+                        (deform_tma_latency + deform_storage_latency) +
+                        deform_interp_latency;
+  max_deform_latency = deform_attn_latency;
 }
 
 void shader_core_ctx::cycle() {

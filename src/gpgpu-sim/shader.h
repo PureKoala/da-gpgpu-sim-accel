@@ -382,7 +382,7 @@ class scheduler_unit {  // this can be copied freely, so can be used in std
                  std::vector<shd_warp_t *> *warp, register_set *sp_out,
                  register_set *dp_out, register_set *sfu_out,
                  register_set *int_out, register_set *tensor_core_out,
-                 register_set *fmr_out,
+                 register_set *fmr_out, register_set *deform_out,
                  std::vector<register_set *> &spec_cores_out,
                  register_set *mem_out, int id)
       : m_supervised_warps(),
@@ -397,6 +397,7 @@ class scheduler_unit {  // this can be copied freely, so can be used in std
         m_int_out(int_out),
         m_tensor_core_out(tensor_core_out),
         m_fmr_out(fmr_out),
+        m_deform_out(deform_out),
         m_mem_out(mem_out),
         m_spec_cores_out(spec_cores_out),
         m_id(id) {}
@@ -485,6 +486,7 @@ class scheduler_unit {  // this can be copied freely, so can be used in std
   register_set *m_int_out;
   register_set *m_tensor_core_out;
   register_set *m_fmr_out;  // FMR output register set
+  register_set *m_deform_out;  // Deformable Attention output (UNUSED - DA uses Function Call only)
   register_set *m_mem_out;
   std::vector<register_set *> &m_spec_cores_out;
   unsigned m_num_issued_last_cycle;
@@ -500,12 +502,12 @@ class lrr_scheduler : public scheduler_unit {
                 std::vector<shd_warp_t *> *warp, register_set *sp_out,
                 register_set *dp_out, register_set *sfu_out,
                 register_set *int_out, register_set *tensor_core_out,
-                register_set *fmr_out,
+                register_set *fmr_out, register_set *deform_out,
                 std::vector<register_set *> &spec_cores_out,
                 register_set *mem_out, int id)
       : scheduler_unit(stats, shader, scoreboard, simt, warp, sp_out, dp_out,
-                       sfu_out, int_out, tensor_core_out, fmr_out, spec_cores_out,
-                       mem_out, id) {}
+                       sfu_out, int_out, tensor_core_out, fmr_out, deform_out,
+                       spec_cores_out, mem_out, id) {}
   virtual ~lrr_scheduler() {}
   virtual void order_warps();
   virtual void done_adding_supervised_warps() {
@@ -520,12 +522,12 @@ class rrr_scheduler : public scheduler_unit {
                 std::vector<shd_warp_t *> *warp, register_set *sp_out,
                 register_set *dp_out, register_set *sfu_out,
                 register_set *int_out, register_set *tensor_core_out,
-                register_set *fmr_out,
+                register_set *fmr_out, register_set *deform_out,
                 std::vector<register_set *> &spec_cores_out,
                 register_set *mem_out, int id)
       : scheduler_unit(stats, shader, scoreboard, simt, warp, sp_out, dp_out,
-                       sfu_out, int_out, tensor_core_out, fmr_out, spec_cores_out,
-                       mem_out, id) {}
+                       sfu_out, int_out, tensor_core_out, fmr_out, deform_out,
+                       spec_cores_out, mem_out, id) {}
   virtual ~rrr_scheduler() {}
   virtual void order_warps();
   virtual void done_adding_supervised_warps() {
@@ -540,12 +542,12 @@ class gto_scheduler : public scheduler_unit {
                 std::vector<shd_warp_t *> *warp, register_set *sp_out,
                 register_set *dp_out, register_set *sfu_out,
                 register_set *int_out, register_set *tensor_core_out,
-                register_set *fmr_out,
+                register_set *fmr_out, register_set *deform_out,
                 std::vector<register_set *> &spec_cores_out,
                 register_set *mem_out, int id)
       : scheduler_unit(stats, shader, scoreboard, simt, warp, sp_out, dp_out,
-                       sfu_out, int_out, tensor_core_out, fmr_out, spec_cores_out,
-                       mem_out, id) {}
+                       sfu_out, int_out, tensor_core_out, fmr_out, deform_out,
+                       spec_cores_out, mem_out, id) {}
   virtual ~gto_scheduler() {}
   virtual void order_warps();
   virtual void done_adding_supervised_warps() {
@@ -560,12 +562,12 @@ class oldest_scheduler : public scheduler_unit {
                    std::vector<shd_warp_t *> *warp, register_set *sp_out,
                    register_set *dp_out, register_set *sfu_out,
                    register_set *int_out, register_set *tensor_core_out,
-                   register_set *fmr_out,
+                   register_set *fmr_out, register_set *deform_out,
                    std::vector<register_set *> &spec_cores_out,
                    register_set *mem_out, int id)
       : scheduler_unit(stats, shader, scoreboard, simt, warp, sp_out, dp_out,
-                       sfu_out, int_out, tensor_core_out, fmr_out, spec_cores_out,
-                       mem_out, id) {}
+                       sfu_out, int_out, tensor_core_out, fmr_out, deform_out,
+                       spec_cores_out, mem_out, id) {}
   virtual ~oldest_scheduler() {}
   virtual void order_warps();
   virtual void done_adding_supervised_warps() {
@@ -581,12 +583,12 @@ class two_level_active_scheduler : public scheduler_unit {
                              register_set *sp_out, register_set *dp_out,
                              register_set *sfu_out, register_set *int_out,
                              register_set *tensor_core_out,
-                             register_set *fmr_out,
+                             register_set *fmr_out, register_set *deform_out,
                              std::vector<register_set *> &spec_cores_out,
                              register_set *mem_out, int id, char *config_str)
       : scheduler_unit(stats, shader, scoreboard, simt, warp, sp_out, dp_out,
-                       sfu_out, int_out, tensor_core_out, fmr_out, spec_cores_out,
-                       mem_out, id),
+                       sfu_out, int_out, tensor_core_out, fmr_out, deform_out,
+                       spec_cores_out, mem_out, id),
         m_pending_warps() {
     unsigned inner_level_readin;
     unsigned outer_level_readin;
@@ -632,7 +634,7 @@ class swl_scheduler : public scheduler_unit {
                 std::vector<shd_warp_t *> *warp, register_set *sp_out,
                 register_set *dp_out, register_set *sfu_out,
                 register_set *int_out, register_set *tensor_core_out,
-                register_set *fmr_out,
+                register_set *fmr_out, register_set *deform_out,
                 std::vector<register_set *> &spec_cores_out,
                 register_set *mem_out, int id, char *config_string);
   virtual ~swl_scheduler() {}
@@ -1286,6 +1288,32 @@ class fmr_unit : public pipelined_simd_unit {
   bool is_issue_partitioned() { return true; }
 };
 
+// Deformable Attention Function Model Unit
+// Implements 5-stage pipeline: PCB -> GTC -> TBC -> TMA & Storage -> Interpolation
+class deform_attn_unit;
+
+// Deformable Attention Execution Unit
+// Deformable Attention Execution Unit
+// NOTE: This class is currently UNUSED because DeformAttn uses ONLY Function Call
+// interception (no pseudo-instructions due to CUDA compilation constraints).
+// All DA operations are intercepted and simulated in cuda-sim.cc.
+// 
+// This class is kept for potential future use if PTX instruction support is added.
+class deform_attn_exec_unit : public pipelined_simd_unit {
+ public:
+  deform_attn_exec_unit(register_set *result_port, const shader_core_config *config,
+                        shader_core_ctx *core, unsigned issue_reg_id);
+  virtual bool can_issue(const warp_inst_t &inst) const {
+    // NOTE: DEFORM_*_OP are NOT defined in opcodes.def
+    // This function will never match any instruction
+    // All DA instructions are handled via Function Call interception
+    return false;  // Always return false - DA uses Function Call only
+  }
+  virtual void active_lanes_in_pipeline();
+  virtual void issue(register_set &source_reg);
+  bool is_issue_partitioned() { return true; }
+};
+
 class int_unit : public pipelined_simd_unit {
  public:
   int_unit(register_set *result_port, const shader_core_config *config,
@@ -1522,6 +1550,8 @@ enum pipeline_stage_name_t {
   OC_EX_TENSOR_CORE,
   ID_OC_FMR,        // FMR unit pipeline stages
   OC_EX_FMR,
+  ID_OC_DEFORM,     // Deformable Attention unit pipeline stages
+  OC_EX_DEFORM,
   N_PIPELINE_STAGES
 };
 
@@ -1529,7 +1559,8 @@ const char *const pipeline_stage_name_decode[] = {
     "ID_OC_SP",          "ID_OC_DP",         "ID_OC_INT", "ID_OC_SFU",
     "ID_OC_MEM",         "OC_EX_SP",         "OC_EX_DP",  "OC_EX_INT",
     "OC_EX_SFU",         "OC_EX_MEM",        "EX_WB",     "ID_OC_TENSOR_CORE",
-    "OC_EX_TENSOR_CORE", "ID_OC_FMR",        "OC_EX_FMR", "N_PIPELINE_STAGES"};
+    "OC_EX_TENSOR_CORE", "ID_OC_FMR",        "OC_EX_FMR", "ID_OC_DEFORM",
+    "OC_EX_DEFORM",      "N_PIPELINE_STAGES"};
 
 
 struct specialized_unit_params {
@@ -1720,6 +1751,20 @@ class shader_core_config : public core_config {
   unsigned int gpgpu_operand_collector_num_out_ports_fmr;
   unsigned int fmr_latency;
 
+  // Deformable Attention configuration
+  unsigned int gpgpu_deform_attn_avail;
+  unsigned int gpgpu_num_deform_units;
+  unsigned int gpgpu_operand_collector_num_in_ports_deform;
+  unsigned int gpgpu_operand_collector_num_out_ports_deform;
+  unsigned int gpgpu_deform_functional_sim_enabled;  // Enable/disable functional simulation (default=1)
+  unsigned int deform_attn_latency;  // Total end-to-end latency (sum of all stages)
+  unsigned int deform_pcb_latency;
+  unsigned int deform_tbc_phase1_latency;
+  unsigned int deform_tbc_phase2_latency;
+  unsigned int deform_tma_latency;
+  unsigned int deform_storage_latency;
+  unsigned int deform_interp_latency;
+
   // Shader core resources
   unsigned gpgpu_shader_registers;
   int gpgpu_warpdistro_shader;
@@ -1736,6 +1781,7 @@ class shader_core_config : public core_config {
   unsigned max_dp_latency;
   unsigned max_tensor_core_latency;
   unsigned max_fmr_latency;  // FMR maximum latency
+  unsigned max_deform_latency;  // Deformable Attention maximum latency
 
   unsigned n_simt_cores_per_cluster;
   unsigned n_simt_clusters;
@@ -2591,6 +2637,10 @@ class shader_core_ctx : public core_t {
   std::vector<simd_function_unit *>
       m_fu;  // stallable pipelines should be last in this array
   ldst_unit *m_ldst_unit;
+
+  // Deformable Attention Function Model
+  deform_attn_unit *m_deform_attn_unit;
+
   static const unsigned MAX_ALU_LATENCY = 512;
   unsigned num_result_bus;
   std::vector<std::bitset<MAX_ALU_LATENCY> *> m_result_bus;
