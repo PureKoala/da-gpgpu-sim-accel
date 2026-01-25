@@ -670,6 +670,58 @@ void shader_core_config::reg_options(class OptionParser *opp) {
   option_parser_register(opp, "-gpgpu_deform_interp_latency", OPT_UINT32,
                          &deform_interp_latency,
                          "Interpolation latency (default=3)", "3");
+  option_parser_register(opp, "-gpgpu_deform_global_scale", OPT_FLOAT,
+                         &deform_global_scale,
+                         "DeformAttn global latency scale (default=1.0)",
+                         "1.0");
+  option_parser_register(opp, "-gpgpu_deform_level_scale_l0", OPT_FLOAT,
+                         &deform_level_scale[0],
+                         "DeformAttn level-0 latency scale (default=1.0)",
+                         "1.0");
+  option_parser_register(opp, "-gpgpu_deform_level_scale_l1", OPT_FLOAT,
+                         &deform_level_scale[1],
+                         "DeformAttn level-1 latency scale (default=1.0)",
+                         "1.0");
+  option_parser_register(opp, "-gpgpu_deform_level_scale_l2", OPT_FLOAT,
+                         &deform_level_scale[2],
+                         "DeformAttn level-2 latency scale (default=1.0)",
+                         "1.0");
+  option_parser_register(opp, "-gpgpu_deform_level_scale_l3", OPT_FLOAT,
+                         &deform_level_scale[3],
+                         "DeformAttn level-3 latency scale (default=1.0)",
+                         "1.0");
+  option_parser_register(opp, "-gpgpu_deform_sparsity_alpha", OPT_FLOAT,
+                         &deform_sparsity_alpha,
+                         "DeformAttn sparsity factor alpha (default=0.0)",
+                         "0.0");
+  option_parser_register(opp, "-gpgpu_deform_sparsity_min_factor", OPT_FLOAT,
+                         &deform_sparsity_min_factor,
+                         "DeformAttn sparsity min factor (default=0.5)",
+                         "0.5");
+  option_parser_register(opp, "-gpgpu_deform_sparsity_max_factor", OPT_FLOAT,
+                         &deform_sparsity_max_factor,
+                         "DeformAttn sparsity max factor (default=2.0)",
+                         "2.0");
+  option_parser_register(opp, "-gpgpu_deform_mode_penalty_0", OPT_INT32,
+                         &deform_mode_penalty[0],
+                         "DeformAttn mode penalty (0=Horizontal)", "0");
+  option_parser_register(opp, "-gpgpu_deform_mode_penalty_1", OPT_INT32,
+                         &deform_mode_penalty[1],
+                         "DeformAttn mode penalty (1=Vertical)", "0");
+  option_parser_register(opp, "-gpgpu_deform_mode_penalty_2", OPT_INT32,
+                         &deform_mode_penalty[2],
+                         "DeformAttn mode penalty (2=XOR)", "0");
+  option_parser_register(opp, "-gpgpu_deform_mode_penalty_3", OPT_INT32,
+                         &deform_mode_penalty[3],
+                         "DeformAttn mode penalty (3=Discrete)", "0");
+  option_parser_register(opp, "-gpgpu_deform_tma_per_elem", OPT_FLOAT,
+                         &deform_tma_per_elem,
+                         "DeformAttn TMA extra cycles per tile element (default=0.0)",
+                         "0.0");
+  option_parser_register(opp, "-gpgpu_deform_interp_per_point", OPT_FLOAT,
+                         &deform_interp_per_point,
+                         "DeformAttn interp extra cycles per valid point (default=0.0)",
+                         "0.0");
   option_parser_register(
       opp, "-gpgpu_operand_collector_num_in_ports_deform", OPT_UINT32,
       &gpgpu_operand_collector_num_in_ports_deform,

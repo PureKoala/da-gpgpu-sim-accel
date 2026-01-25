@@ -1603,7 +1603,8 @@ class shader_core_config : public core_config {
      */
     int num_config_to_read = N_PIPELINE_STAGES 
                            - 2 * (!gpgpu_tensor_core_avail)
-                           - 2 * (!gpgpu_fmr_avail);
+                           - 2 * (!gpgpu_fmr_avail)
+                           - 2 * (!gpgpu_deform_attn_avail);
 
     for (int i = 0; i < num_config_to_read; i++) {
       assert(toks);
@@ -1764,6 +1765,14 @@ class shader_core_config : public core_config {
   unsigned int deform_tma_latency;
   unsigned int deform_storage_latency;
   unsigned int deform_interp_latency;
+  float deform_global_scale;
+  float deform_level_scale[4];
+  float deform_sparsity_alpha;
+  float deform_sparsity_min_factor;
+  float deform_sparsity_max_factor;
+  int deform_mode_penalty[4];
+  float deform_tma_per_elem;
+  float deform_interp_per_point;
 
   // Shader core resources
   unsigned gpgpu_shader_registers;

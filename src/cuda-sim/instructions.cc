@@ -51,6 +51,7 @@ class ptx_recognizer;
 #include <vector>
 #include <utility>
 #include <algorithm>
+#include <unordered_map>
 #include "../abstract_hardware_model.h"
 #include "../gpgpu-sim/gpu-sim.h"
 #include "../gpgpu-sim/shader.h"
@@ -66,6 +67,94 @@ class ptx_recognizer;
 #include "../../libcuda/gpgpu_context.h"
 
 using half_float::half;
+
+namespace {
+struct deform_block_key {
+  unsigned kernel_uid;
+  unsigned cta_x;
+  unsigned cta_y;
+  unsigned cta_z;
+  unsigned level;
+};
+
+struct deform_block_state {
+  int num_points = 0;
+  int valid_points = 0;
+  int mode = 0;
+  int tile_w = 0;
+  int tile_h = 0;
+  bool pcb_latency_applied = false;
+  bool tbc_latency_applied = false;
+  bool tma_latency_applied = false;
+  bool interp_latency_applied = false;
+};
+
+struct deform_block_key_hash {
+  std::size_t operator()(const deform_block_key &k) const noexcept {
+    std::size_t h = 1469598103934665603ull;
+    auto mix = [&](std::size_t v) {
+      h ^= v + 0x9e3779b97f4a7c15ull + (h << 6) + (h >> 2);
+    };
+    mix(k.kernel_uid);
+    mix(k.cta_x);
+    mix(k.cta_y);
+    mix(k.cta_z);
+    mix(k.level);
+    return h;
+  }
+};
+
+inline bool operator==(const deform_block_key &a,
+                       const deform_block_key &b) noexcept {
+  return a.kernel_uid == b.kernel_uid && a.cta_x == b.cta_x &&
+         a.cta_y == b.cta_y && a.cta_z == b.cta_z && a.level == b.level;
+}
+
+static std::unordered_map<deform_block_key, deform_block_state,
+                          deform_block_key_hash>
+    g_deform_block_state;
+
+inline float clampf(float v, float lo, float hi) {
+  if (v < lo) return lo;
+  if (v > hi) return hi;
+  return v;
+}
+
+inline unsigned clamp_latency(float v) {
+  if (v < 1.0f) return 1;
+  // Keep within scheduler occupancy bitset bounds (MAX_ALU_LATENCY=512).
+  if (v > 511.0f) return 511;
+  return static_cast<unsigned>(v + 0.5f);
+}
+
+inline float level_scale_or_default(const shader_core_config *cfg, int level) {
+  if (level < 0) return 1.0f;
+  if (level > 3) level = 3;
+  return cfg->deform_level_scale[level];
+}
+
+inline float sparsity_factor_or_default(const shader_core_config *cfg,
+                                        int valid_points, int num_points) {
+  if (num_points <= 0) return 1.0f;
+  float valid_ratio = static_cast<float>(valid_points) /
+                      static_cast<float>(num_points);
+  float sparsity = 1.0f - clampf(valid_ratio, 0.0f, 1.0f);
+  float factor = 1.0f - cfg->deform_sparsity_alpha * sparsity;
+  return clampf(factor, cfg->deform_sparsity_min_factor,
+                cfg->deform_sparsity_max_factor);
+}
+
+inline deform_block_state &get_block_state(kernel_info_t &k, dim3 ctaid,
+                                           int level) {
+  deform_block_key key;
+  key.kernel_uid = k.get_uid();
+  key.cta_x = ctaid.x;
+  key.cta_y = ctaid.y;
+  key.cta_z = ctaid.z;
+  key.level = static_cast<unsigned>(level);
+  return g_deform_block_state[key];
+}
+}  // namespace
 
 const char *g_opcode_string[NUM_OPCODES] = {
 #define OP_DEF(OP, FUNC, STR, DST, CLASSIFICATION) STR,
@@ -3822,59 +3911,106 @@ void ld_sample_fmr_impl(const ptx_instruction *pI, core_t *core, warp_inst_t &in
 // Stage 1: PCB (Pre-Check Block) - Weight Pruning
 void deform_pcb_impl(const ptx_instruction *pI, core_t *core, warp_inst_t &inst) {
   // PCB Stage: Pre-Check Block for weight pruning
-  // CUDA signature: __deform_pcb(const float* weights, float threshold, bool* mask, int num_points)
-  // operand[1]: weights (pointer)
-  // operand[2]: threshold (float)
-  // operand[3]: mask (pointer)
-  // operand[4]: num_points (int)
-  
+  // CUDA signature: __deform_pcb(const float* weights, float threshold, bool* mask, int num_points, int level)
+
+  // Early check: if functional simulation is disabled, just set latency and return
+  gpgpu_sim *gpu = (gpgpu_sim*)core->get_gpu();
+  inst.m_deform_stage = 1;  // PCB
+  inst.latency = gpu->get_shader_config()->deform_pcb_latency;
+
+  if (!gpu->get_shader_config()->gpgpu_deform_functional_sim_enabled) {
+    if (gpu->gpgpu_ctx->debug_tensorcore) {
+      printf("DEFORM_PCB: [BYPASS] functional_sim disabled, latency=%d\n", inst.latency);
+    }
+    return;
+  }
+
   int tid = inst.warp_id() * core->get_warp_size();
   ptx_thread_info *thread = core->get_thread_info()[tid];
-  
-  const operand_info &weights_op = pI->operand_lookup(1);
-  const operand_info &threshold_op = pI->operand_lookup(2);
-  const operand_info &mask_op = pI->operand_lookup(3);
-  const operand_info &num_points_op = pI->operand_lookup(4);
+
+  int arg_base = 1;
+  int n_args = 0;
+  {
+    const operand_info &target = pI->func_addr();
+    if (target.is_function_address()) {
+      function_info *target_func = target.get_symbol()->get_pc();
+      arg_base = target_func->has_return() + 1;
+      n_args = target_func->num_args();
+    } else {
+      arg_base = pI->has_return() ? 2 : 1;
+      if (pI->get_num_operands() >= static_cast<unsigned>(arg_base)) {
+        n_args = pI->get_num_operands() - arg_base;
+      }
+    }
+  }
+  if (n_args <= 0) {
+    inst.latency = 1;
+    return;
+  }
+  if (pI->get_num_operands() <= static_cast<unsigned>(arg_base)) {
+    inst.latency = 1;
+    return;
+  }
+  const operand_info &weights_op = pI->operand_lookup(arg_base + 0);
+  const operand_info *threshold_op = NULL;
+  const operand_info *mask_op = NULL;
+  const operand_info *num_points_op = NULL;
+  const operand_info *level_op = NULL;
+  if (n_args == 4) {
+    // Threshold optimized out: args = weights, mask, num_points, level
+    mask_op = &pI->operand_lookup(arg_base + 1);
+    num_points_op = &pI->operand_lookup(arg_base + 2);
+    level_op = &pI->operand_lookup(arg_base + 3);
+  } else {
+    // Standard signature: weights, threshold, mask, num_points, level
+    threshold_op = &pI->operand_lookup(arg_base + 1);
+    mask_op = &pI->operand_lookup(arg_base + 2);
+    num_points_op = &pI->operand_lookup(arg_base + 3);
+    if (n_args > 4) {
+      level_op = &pI->operand_lookup(arg_base + 4);
+    }
+  }
   
   // Read parameters from .param space (standard CUDA function call convention)
   unsigned long long weights_ptr, mask_ptr;
   float threshold;
   int num_points;
+  int level = 0;
   
-  thread->m_local_mem->read(weights_op.get_symbol()->get_address(), sizeof(unsigned long long), &weights_ptr);
-  thread->m_local_mem->read(threshold_op.get_symbol()->get_address(), sizeof(float), &threshold);
-  thread->m_local_mem->read(mask_op.get_symbol()->get_address(), sizeof(unsigned long long), &mask_ptr);
-  thread->m_local_mem->read(num_points_op.get_symbol()->get_address(), sizeof(int), &num_points);
+  thread->m_local_mem->read(weights_op.get_symbol()->get_address(),
+                            sizeof(unsigned long long), &weights_ptr);
+  if (threshold_op) {
+    thread->m_local_mem->read(threshold_op->get_symbol()->get_address(),
+                              sizeof(float), &threshold);
+  } else {
+    threshold = 0.0f;
+  }
+  if (mask_op) {
+    thread->m_local_mem->read(mask_op->get_symbol()->get_address(),
+                              sizeof(unsigned long long), &mask_ptr);
+  }
+  if (num_points_op) {
+    thread->m_local_mem->read(num_points_op->get_symbol()->get_address(),
+                              sizeof(int), &num_points);
+  }
+  if (level_op) {
+    thread->m_local_mem->read(level_op->get_symbol()->get_address(),
+                              sizeof(int), &level);
+  }
   
-  // Debug output
-  gpgpu_sim *gpu = (gpgpu_sim*)core->get_gpu();
+  // Debug output (functional sim is enabled if we reach here)
   if (gpu->gpgpu_ctx->debug_tensorcore) {
     printf("DEFORM_PCB: weights_ptr=0x%llx, threshold=%.6f, mask_ptr=0x%llx, num_points=%d\n",
            (unsigned long long)weights_ptr, threshold, (unsigned long long)mask_ptr, num_points);
   }
-  
+
   // Store metadata in instruction for timing model
   inst.m_deform_stage = 1;  // PCB
-  
-  // Check if functional simulation is enabled
-  if (!gpu->get_shader_config()->gpgpu_deform_functional_sim_enabled) {
-    // Dummy mode: skip functional simulation, just write zeros to mask
-    unsigned smid = thread->get_hw_sid();
-    if (whichspace(mask_ptr) == shared_space) {
-      mask_ptr = generic_to_shared(smid, mask_ptr);
-    }
-    memory_space_t mask_space = global_space;
-    memory_space *mask_mem = NULL;
-    decode_space(mask_space, thread, mask_op, mask_mem, mask_ptr);
-    
-    for (int i = 0; i < num_points; i++) {
-      uint8_t mask_bit = 0;  // All valid (no pruning)
-      mask_mem->write(mask_ptr + i, sizeof(uint8_t), &mask_bit, thread, pI);
-    }
-    inst.m_deform_valid_points = num_points;  // All points valid
-    return;
-  }
-  
+
+  // Block-level state for latency modeling
+  kernel_info_t &k = thread->get_kernel();
+  deform_block_state &blk_state = get_block_state(k, thread->get_ctaid(), level);
+
   // Address space conversion
   unsigned smid = thread->get_hw_sid();
   if (whichspace(weights_ptr) == shared_space) {
@@ -3889,7 +4025,7 @@ void deform_pcb_impl(const ptx_instruction *pI, core_t *core, warp_inst_t &inst)
   memory_space_t mask_space = global_space;
   memory_space *weights_mem = NULL, *mask_mem = NULL;
   decode_space(weights_space, thread, weights_op, weights_mem, weights_ptr);
-  decode_space(mask_space, thread, mask_op, mask_mem, mask_ptr);
+  decode_space(mask_space, thread, *mask_op, mask_mem, mask_ptr);
   
   // PCB Functional Simulation: Weight pruning
   int valid_count = 0;
@@ -3911,6 +4047,20 @@ void deform_pcb_impl(const ptx_instruction *pI, core_t *core, warp_inst_t &inst)
   }
   
   inst.m_deform_valid_points = valid_count;
+  blk_state.num_points = num_points;
+  blk_state.valid_points = valid_count;
+
+  const shader_core_config *cfg = gpu->get_shader_config();
+  if (!blk_state.pcb_latency_applied) {
+    float scale = cfg->deform_global_scale *
+                  level_scale_or_default(cfg, level) *
+                  sparsity_factor_or_default(cfg, valid_count, num_points);
+    float lat = static_cast<float>(cfg->deform_pcb_latency) * scale;
+    inst.latency = clamp_latency(lat);
+    blk_state.pcb_latency_applied = true;
+  } else {
+    inst.latency = 1;
+  }
   
   if (gpu->gpgpu_ctx->debug_tensorcore) {
     printf("DEFORM_PCB: Pruning complete - valid_points=%d/%d (prune_rate=%.2f%%)\n",
@@ -3934,32 +4084,53 @@ void deform_gtc_impl(const ptx_instruction *pI, core_t *core, warp_inst_t &inst)
 void deform_tbc_impl(const ptx_instruction *pI, core_t *core, warp_inst_t &inst) {
   // TBC Stage: Tile Boundary Check for aggregation decision
   // CUDA signature: int __deform_tbc(const float* coords, const bool* mask, int num_points,
-  //                                   int* base_x, int* base_y, int* tile_w, int* tile_h)
-  // operand[0]: return value (int - mode)
-  // operand[1]: coords (pointer)
-  // operand[2]: mask (pointer)
-  // operand[3]: num_points (int)
-  // operand[4]: base_x (pointer)
-  // operand[5]: base_y (pointer)
-  // operand[6]: tile_w (pointer)
-  // operand[7]: tile_h (pointer)
-  
+  //                                   int* base_x, int* base_y, int* tile_w, int* tile_h, int level)
+
+  // Early check: if functional simulation is disabled, just set latency and return
+  gpgpu_sim *gpu = (gpgpu_sim*)core->get_gpu();
+  inst.m_deform_stage = 3;  // TBC
+  inst.m_deform_tile_mode = 0;  // Default: Horizontal mode
+  inst.latency = gpu->get_shader_config()->deform_tbc_phase1_latency +
+                 gpu->get_shader_config()->deform_tbc_phase2_latency;
+
+  if (!gpu->get_shader_config()->gpgpu_deform_functional_sim_enabled) {
+    if (gpu->gpgpu_ctx->debug_tensorcore) {
+      printf("DEFORM_TBC: [BYPASS] functional_sim disabled, latency=%d\n", inst.latency);
+    }
+    return;
+  }
+
   int tid = inst.warp_id() * core->get_warp_size();
   ptx_thread_info *thread = core->get_thread_info()[tid];
-  
+
   // Store metadata
   inst.m_deform_stage = 3;  // TBC
-  
-  const operand_info &coords_op = pI->operand_lookup(1);
-  const operand_info &mask_op = pI->operand_lookup(2);
-  const operand_info &num_points_op = pI->operand_lookup(3);
-  const operand_info &base_x_op = pI->operand_lookup(4);
-  const operand_info &base_y_op = pI->operand_lookup(5);
-  const operand_info &tile_w_op = pI->operand_lookup(6);
-  const operand_info &tile_h_op = pI->operand_lookup(7);
+
+  int arg_base = 1;
+  {
+    const operand_info &target = pI->func_addr();
+    if (target.is_function_address()) {
+      function_info *target_func = target.get_symbol()->get_pc();
+      arg_base = target_func->has_return() + 1;
+    } else {
+      arg_base = pI->has_return() ? 2 : 1;
+    }
+  }
+  if (pI->get_num_operands() <= static_cast<unsigned>(arg_base + 6)) {
+    inst.latency = 1;
+    return;
+  }
+  const operand_info &coords_op = pI->operand_lookup(arg_base + 0);
+  const operand_info &mask_op = pI->operand_lookup(arg_base + 1);
+  const operand_info &num_points_op = pI->operand_lookup(arg_base + 2);
+  const operand_info &base_x_op = pI->operand_lookup(arg_base + 3);
+  const operand_info &base_y_op = pI->operand_lookup(arg_base + 4);
+  const operand_info &tile_w_op = pI->operand_lookup(arg_base + 5);
+  const operand_info &tile_h_op = pI->operand_lookup(arg_base + 6);
   
   unsigned long long coords_ptr, mask_ptr, base_x_ptr, base_y_ptr, tile_w_ptr, tile_h_ptr;
   int num_points;
+  int level = 0;
   
   thread->m_local_mem->read(coords_op.get_symbol()->get_address(), sizeof(unsigned long long), &coords_ptr);
   thread->m_local_mem->read(mask_op.get_symbol()->get_address(), sizeof(unsigned long long), &mask_ptr);
@@ -3968,26 +4139,15 @@ void deform_tbc_impl(const ptx_instruction *pI, core_t *core, warp_inst_t &inst)
   thread->m_local_mem->read(base_y_op.get_symbol()->get_address(), sizeof(unsigned long long), &base_y_ptr);
   thread->m_local_mem->read(tile_w_op.get_symbol()->get_address(), sizeof(unsigned long long), &tile_w_ptr);
   thread->m_local_mem->read(tile_h_op.get_symbol()->get_address(), sizeof(unsigned long long), &tile_h_ptr);
-  
-  // Check if functional simulation is enabled
-  gpgpu_sim *gpu = (gpgpu_sim*)core->get_gpu();
-  if (!gpu->get_shader_config()->gpgpu_deform_functional_sim_enabled) {
-    // Dummy mode: write default tile parameters
-    memory_space *output_mem = thread->m_local_mem;
-    int base_x = 0, base_y = 0, tile_w = 16, tile_h = 16;
-    int mode = 0;  // Horizontal mode
-    
-    output_mem->write(base_x_ptr, sizeof(int), &base_x, thread, pI);
-    output_mem->write(base_y_ptr, sizeof(int), &base_y, thread, pI);
-    output_mem->write(tile_w_ptr, sizeof(int), &tile_w, thread, pI);
-    output_mem->write(tile_h_ptr, sizeof(int), &tile_h, thread, pI);
-    
-    inst.m_deform_tile_mode = mode;
-    inst.m_deform_valid_points = num_points;
-    return;
+  if (pI->get_num_operands() > static_cast<unsigned>(arg_base + 7)) {
+    const operand_info &level_op = pI->operand_lookup(arg_base + 7);
+    thread->m_local_mem->read(level_op.get_symbol()->get_address(), sizeof(int), &level);
   }
-  
-  // Address space conversion
+
+  kernel_info_t &k = thread->get_kernel();
+  deform_block_state &blk_state = get_block_state(k, thread->get_ctaid(), level);
+
+  // Address space conversion (functional sim is enabled if we reach here)
   unsigned smid = thread->get_hw_sid();
   if (whichspace(coords_ptr) == shared_space) {
     coords_ptr = generic_to_shared(smid, coords_ptr);
@@ -4052,6 +4212,27 @@ void deform_tbc_impl(const ptx_instruction *pI, core_t *core, warp_inst_t &inst)
   // Store metadata
   inst.m_deform_tile_mode = mode;
   inst.m_deform_valid_points = valid_count;
+  blk_state.num_points = num_points;
+  blk_state.valid_points = valid_count;
+  blk_state.mode = mode;
+  blk_state.tile_w = tile_w;
+  blk_state.tile_h = tile_h;
+
+  const shader_core_config *cfg = gpu->get_shader_config();
+  if (!blk_state.tbc_latency_applied) {
+    float scale = cfg->deform_global_scale *
+                  level_scale_or_default(cfg, level) *
+                  sparsity_factor_or_default(cfg, valid_count, num_points);
+    float base = static_cast<float>(cfg->deform_tbc_phase1_latency +
+                                    cfg->deform_tbc_phase2_latency);
+    int mode_idx = (mode < 0 || mode > 3) ? 0 : mode;
+    float lat =
+        base * scale + static_cast<float>(cfg->deform_mode_penalty[mode_idx]);
+    inst.latency = clamp_latency(lat);
+    blk_state.tbc_latency_applied = true;
+  } else {
+    inst.latency = 1;
+  }
   
   if (gpu->gpgpu_ctx->debug_tensorcore) {
     const char* mode_names[] = {"HORIZONTAL", "VERTICAL", "XOR", "DISCRETE"};
@@ -4065,26 +4246,48 @@ void deform_tbc_impl(const ptx_instruction *pI, core_t *core, warp_inst_t &inst)
 void deform_tma_impl(const ptx_instruction *pI, core_t *core, warp_inst_t &inst) {
   // TMA Stage: Tile Memory Accelerator for feature map loading
   // CUDA signature: void __deform_tma(const float* src, float* dst, int tile_w, int tile_h,
-  //                                    int src_pitch, int mode)
-  // operand[1]: src (pointer to global memory)
-  // operand[2]: dst (pointer to shared memory tile buffer)
-  // operand[3]: tile_w (int)
-  // operand[4]: tile_h (int)
-  // operand[5]: src_pitch (int)
-  // operand[6]: mode (int)
-  
+  //                                    int src_pitch, int mode, int level)
+
+  // Early check: if functional simulation is disabled, just set latency and return
+  gpgpu_sim *gpu = (gpgpu_sim*)core->get_gpu();
+  inst.m_deform_stage = 4;  // TMA
+  inst.latency = gpu->get_shader_config()->deform_tma_latency +
+                 gpu->get_shader_config()->deform_storage_latency;
+
+  if (!gpu->get_shader_config()->gpgpu_deform_functional_sim_enabled) {
+    if (gpu->gpgpu_ctx->debug_tensorcore) {
+      printf("DEFORM_TMA: [BYPASS] functional_sim disabled, latency=%d\n", inst.latency);
+    }
+    return;
+  }
+
   int tid = inst.warp_id() * core->get_warp_size();
   ptx_thread_info *thread = core->get_thread_info()[tid];
-  
-  const operand_info &src_op = pI->operand_lookup(1);
-  const operand_info &dst_op = pI->operand_lookup(2);
-  const operand_info &tile_w_op = pI->operand_lookup(3);
-  const operand_info &tile_h_op = pI->operand_lookup(4);
-  const operand_info &src_pitch_op = pI->operand_lookup(5);
-  const operand_info &mode_op = pI->operand_lookup(6);
+
+  int arg_base = 1;
+  {
+    const operand_info &target = pI->func_addr();
+    if (target.is_function_address()) {
+      function_info *target_func = target.get_symbol()->get_pc();
+      arg_base = target_func->has_return() + 1;
+    } else {
+      arg_base = pI->has_return() ? 2 : 1;
+    }
+  }
+  if (pI->get_num_operands() <= static_cast<unsigned>(arg_base + 5)) {
+    inst.latency = 1;
+    return;
+  }
+  const operand_info &src_op = pI->operand_lookup(arg_base + 0);
+  const operand_info &dst_op = pI->operand_lookup(arg_base + 1);
+  const operand_info &tile_w_op = pI->operand_lookup(arg_base + 2);
+  const operand_info &tile_h_op = pI->operand_lookup(arg_base + 3);
+  const operand_info &src_pitch_op = pI->operand_lookup(arg_base + 4);
+  const operand_info &mode_op = pI->operand_lookup(arg_base + 5);
   
   unsigned long long src_ptr, dst_ptr;
   int tile_w, tile_h, src_pitch, mode;
+  int level = 0;
   
   thread->m_local_mem->read(src_op.get_symbol()->get_address(), sizeof(unsigned long long), &src_ptr);
   thread->m_local_mem->read(dst_op.get_symbol()->get_address(), sizeof(unsigned long long), &dst_ptr);
@@ -4092,41 +4295,25 @@ void deform_tma_impl(const ptx_instruction *pI, core_t *core, warp_inst_t &inst)
   thread->m_local_mem->read(tile_h_op.get_symbol()->get_address(), sizeof(int), &tile_h);
   thread->m_local_mem->read(src_pitch_op.get_symbol()->get_address(), sizeof(int), &src_pitch);
   thread->m_local_mem->read(mode_op.get_symbol()->get_address(), sizeof(int), &mode);
-  
+  if (pI->get_num_operands() > static_cast<unsigned>(arg_base + 6)) {
+    const operand_info &level_op = pI->operand_lookup(arg_base + 6);
+    thread->m_local_mem->read(level_op.get_symbol()->get_address(), sizeof(int), &level);
+  }
+
+  kernel_info_t &k = thread->get_kernel();
+  deform_block_state &blk_state = get_block_state(k, thread->get_ctaid(), level);
+
   // Store metadata
   inst.m_deform_stage = 4;  // TMA
   inst.m_deform_tile_mode = mode;
-  
-  gpgpu_sim *gpu = (gpgpu_sim*)core->get_gpu();
+
+  // Debug output (functional sim is enabled if we reach here)
   if (gpu->gpgpu_ctx->debug_tensorcore) {
     printf("DEFORM_TMA: src=0x%llx, dst=0x%llx, tile=%dx%d, pitch=%d, mode=%d\n",
-           (unsigned long long)src_ptr, (unsigned long long)dst_ptr, 
+           (unsigned long long)src_ptr, (unsigned long long)dst_ptr,
            tile_w, tile_h, src_pitch, mode);
   }
-  
-  // Check if functional simulation is enabled
-  if (!gpu->get_shader_config()->gpgpu_deform_functional_sim_enabled) {
-    // Dummy mode: write zeros to dst tile buffer
-    unsigned smid = thread->get_hw_sid();
-    if (whichspace(dst_ptr) == shared_space) {
-      dst_ptr = generic_to_shared(smid, dst_ptr);
-    }
-    memory_space_t dst_space = shared_space;
-    memory_space *dst_mem = NULL;
-    decode_space(dst_space, thread, dst_op, dst_mem, dst_ptr);
-    
-    const int dst_pitch = 17;
-    for (int row = 0; row < tile_h; row++) {
-      for (int col = 0; col < tile_w; col++) {
-        float zero = 0.0f;
-        addr_t dst_addr = dst_ptr + (row * dst_pitch + col) * sizeof(float);
-        dst_mem->write(dst_addr, sizeof(float), &zero, thread, pI);
-      }
-    }
-    inst.m_deform_mem_accesses = tile_w * tile_h;
-    return;
-  }
-  
+
   // Address space conversion
   unsigned smid = thread->get_hw_sid();
   if (whichspace(src_ptr) == global_space) {
@@ -4185,6 +4372,26 @@ void deform_tma_impl(const ptx_instruction *pI, core_t *core, warp_inst_t &inst)
   
   // Store metadata
   inst.m_deform_mem_accesses = total_accesses;
+  blk_state.mode = mode;
+  blk_state.tile_w = tile_w;
+  blk_state.tile_h = tile_h;
+
+  const shader_core_config *cfg = gpu->get_shader_config();
+  if (!blk_state.tma_latency_applied) {
+    float scale = cfg->deform_global_scale *
+                  level_scale_or_default(cfg, level) *
+                  sparsity_factor_or_default(cfg, blk_state.valid_points,
+                                             blk_state.num_points);
+    float base = static_cast<float>(cfg->deform_tma_latency +
+                                    cfg->deform_storage_latency);
+    float extra = cfg->deform_tma_per_elem *
+                  static_cast<float>(tile_w * tile_h);
+    float lat = base * scale + extra;
+    inst.latency = clamp_latency(lat);
+    blk_state.tma_latency_applied = true;
+  } else {
+    inst.latency = 1;
+  }
   
   if (gpu->gpgpu_ctx->debug_tensorcore) {
     printf("DEFORM_TMA: Loaded %dx%d tile (%d accesses), mem_txns=%d\n",
@@ -4195,47 +4402,70 @@ void deform_tma_impl(const ptx_instruction *pI, core_t *core, warp_inst_t &inst)
 // Stage 5: INTERP (Interpolation) - Bilinear Interpolation
 void deform_interp_impl(const ptx_instruction *pI, core_t *core, warp_inst_t &inst) {
   // INTERP Stage: Bilinear interpolation computation
-  // CUDA signature: float __deform_interp(const float* tile_buffer, float local_x, 
-  //                                        float local_y, int mode)
-  // operand[0]: return value (float - interpolated result)
-  // operand[1]: tile_buffer (pointer to shared memory)
-  // operand[2]: local_x (float)
-  // operand[3]: local_y (float)
-  // operand[4]: mode (int)
-  
+  // CUDA signature: float __deform_interp(const float* tile_buffer, float local_x,
+  //                                        float local_y, int mode, int level)
+
+  // Early check: if functional simulation is disabled, just set latency and return
+  gpgpu_sim *gpu = (gpgpu_sim*)core->get_gpu();
+  inst.m_deform_stage = 5;  // INTERP
+  inst.m_deform_interp_result = 0.0f;  // Dummy result
+  inst.latency = gpu->get_shader_config()->deform_interp_latency;
+
+  if (!gpu->get_shader_config()->gpgpu_deform_functional_sim_enabled) {
+    if (gpu->gpgpu_ctx->debug_tensorcore) {
+      printf("DEFORM_INTERP: [BYPASS] functional_sim disabled, latency=%d\n", inst.latency);
+    }
+    return;
+  }
+
   int tid = inst.warp_id() * core->get_warp_size();
   ptx_thread_info *thread = core->get_thread_info()[tid];
-  gpgpu_sim *gpu = (gpgpu_sim*)core->get_gpu();
   
-  const operand_info &tile_buffer_op = pI->operand_lookup(1);
-  const operand_info &local_x_op = pI->operand_lookup(2);
-  const operand_info &local_y_op = pI->operand_lookup(3);
-  const operand_info &mode_op = pI->operand_lookup(4);
+  int arg_base = 1;
+  {
+    const operand_info &target = pI->func_addr();
+    if (target.is_function_address()) {
+      function_info *target_func = target.get_symbol()->get_pc();
+      arg_base = target_func->has_return() + 1;
+    } else {
+      arg_base = pI->has_return() ? 2 : 1;
+    }
+  }
+  if (pI->get_num_operands() <= static_cast<unsigned>(arg_base + 3)) {
+    inst.latency = 1;
+    return;
+  }
+  const operand_info &tile_buffer_op = pI->operand_lookup(arg_base + 0);
+  const operand_info &local_x_op = pI->operand_lookup(arg_base + 1);
+  const operand_info &local_y_op = pI->operand_lookup(arg_base + 2);
+  const operand_info &mode_op = pI->operand_lookup(arg_base + 3);
   
   unsigned long long tile_buffer_ptr;
   float local_x, local_y;
   int mode;
+  int level = 0;
   
   thread->m_local_mem->read(tile_buffer_op.get_symbol()->get_address(), sizeof(unsigned long long), &tile_buffer_ptr);
   thread->m_local_mem->read(local_x_op.get_symbol()->get_address(), sizeof(float), &local_x);
   thread->m_local_mem->read(local_y_op.get_symbol()->get_address(), sizeof(float), &local_y);
   thread->m_local_mem->read(mode_op.get_symbol()->get_address(), sizeof(int), &mode);
-  
+  if (pI->get_num_operands() > static_cast<unsigned>(arg_base + 4)) {
+    const operand_info &level_op = pI->operand_lookup(arg_base + 4);
+    thread->m_local_mem->read(level_op.get_symbol()->get_address(), sizeof(int), &level);
+  }
+
+  kernel_info_t &k = thread->get_kernel();
+  deform_block_state &blk_state = get_block_state(k, thread->get_ctaid(), level);
+
   // Store metadata
   inst.m_deform_stage = 5;  // INTERP
-  
-  // Check if functional simulation is enabled
+
+  // Debug output (functional sim is enabled if we reach here)
   if (gpu->gpgpu_ctx->debug_tensorcore) {
     printf("DEFORM_INTERP: tile_buffer=0x%llx, local=(%.3f,%.3f), mode=%d\n",
            (unsigned long long)tile_buffer_ptr, local_x, local_y, mode);
   }
-  if (!gpu->get_shader_config()->gpgpu_deform_functional_sim_enabled) {
-    // Dummy mode: return a dummy interpolation result
-    float result = 0.5f;  // Dummy value
-    inst.m_deform_interp_result = result;
-    return;
-  }
-  
+
   // Address space conversion
   unsigned smid = thread->get_hw_sid();
   if (whichspace(tile_buffer_ptr) == shared_space) {
@@ -4286,6 +4516,24 @@ void deform_interp_impl(const ptx_instruction *pI, core_t *core, warp_inst_t &in
   
   // Store metadata
   inst.m_deform_interp_result = result;  // Store for debugging
+
+  const shader_core_config *cfg = gpu->get_shader_config();
+  if (!blk_state.interp_latency_applied) {
+    float scale = cfg->deform_global_scale *
+                  level_scale_or_default(cfg, level) *
+                  sparsity_factor_or_default(cfg, blk_state.valid_points,
+                                             blk_state.num_points);
+    float base = static_cast<float>(cfg->deform_interp_latency);
+    float extra = cfg->deform_interp_per_point *
+                  static_cast<float>(
+                      blk_state.valid_points > 0 ? blk_state.valid_points
+                                                 : blk_state.num_points);
+    float lat = base * scale + extra;
+    inst.latency = clamp_latency(lat);
+    blk_state.interp_latency_applied = true;
+  } else {
+    inst.latency = 1;
+  }
   
   if (gpu->gpgpu_ctx->debug_tensorcore) {
     printf("DEFORM_INTERP: corners=[%.3f,%.3f,%.3f,%.3f], weights=(%.3f,%.3f), result=%.6f\n",

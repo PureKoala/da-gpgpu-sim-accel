@@ -1,0 +1,9 @@
+ptxas info    : 0 bytes gmem
+ptxas info    : Compiling entry function '_Z42ms_deformable_col2im_gpu_kernel_shm_reduceIfLj64EEviPKT_S2_PKlS4_S2_S2_iiiiiiiPS0_S5_S5_' for 'sm_86'
+ptxas info    : Function properties for _Z42ms_deformable_col2im_gpu_kernel_shm_reduceIfLj64EEviPKT_S2_PKlS4_S2_S2_iiiiiiiPS0_S5_S5_
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 48 registers, 768 bytes smem, 464 bytes cmem[0]
+ptxas info    : Compiling entry function '_Z31ms_deformable_im2col_gpu_kernelIfEviPKT_PKlS4_S2_S2_iiiiiiiPS0_' for 'sm_86'
+ptxas info    : Function properties for _Z31ms_deformable_im2col_gpu_kernelIfEviPKT_PKlS4_S2_S2_iiiiiiiPS0_
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 39 registers, 440 bytes cmem[0]

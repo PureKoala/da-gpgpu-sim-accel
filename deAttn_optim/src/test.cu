@@ -543,7 +543,8 @@ int main(int argc, char** argv) {
     // 预测阶段性能统计 (FP16)
     stats.predict_so_time_ms = pred_so_time;
     stats.predict_attn_time_ms = pred_attn_time;
-    stats.conversion_time_ms = convert_time_ms;
+    // 不统计主机端 FP32->FP16 转换时间
+    stats.conversion_time_ms = 0.0f;
     
     // 计算实际的Tensor Core利用率（基于N维度）
     // FP16最优配置是N=16 (m16n16k16指令)

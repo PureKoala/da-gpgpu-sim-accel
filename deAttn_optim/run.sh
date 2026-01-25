@@ -72,6 +72,11 @@ else
 	else
 		echo "use existed sim env"
 	fi
+	# Clean previous outputs to avoid stale PTX/binary issues
+	rm -f ${OUTPATH}
+	if [ ${IFBUILD} -eq 1 ]; then
+		rm -f ${BIN}/${NAME}
+	fi
 
 	if [ ${IFBUILD} -eq 1 ] 
 	then
@@ -117,4 +122,3 @@ else
 	fi
 	cd ${CURDIR}
 fi
-

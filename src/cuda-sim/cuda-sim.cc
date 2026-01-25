@@ -1870,7 +1870,7 @@ void ptx_thread_info::ptx_exec_inst(warp_inst_t &inst, unsigned lane_id) {
       // Intercept __fmr_sample CALL before normal CALL processing
       // This allows calling ld_sample_fmr_impl() with core and inst parameters
       // ========================================================================
-      if (inst_opcode == CALL_OP && lane_id == 0) {
+      if (inst_opcode == CALL_OP) {
         const operand_info &target = pI->func_addr();
         if (target.is_function_address()) {
           const symbol *func_addr = target.get_symbol();
@@ -1881,10 +1881,11 @@ void ptx_thread_info::ptx_exec_inst(warp_inst_t &inst, unsigned lane_id) {
             // FMR pseudo-CALL handling:
             // 1. Execute FMR tile load once (lane 0 only)
             // 2. Do NOT treat as a real CALL (no callstack push/pop)
-            // 3. All threads execute this code path and advance PC normally
-            //    (no special PC sync needed - all threads call ptx_exec_inst)
-            core_t *core = get_core();
-            ld_sample_fmr_impl(pI, core, inst);
+            // 3. Skip the CALL for all lanes to avoid sync issues in stubs
+            if (lane_id == 0) {
+              core_t *core = get_core();
+              ld_sample_fmr_impl(pI, core, inst);
+            }
 
             // Mark as FMR pseudo call: skip normal opcode switch
             is_fmr_call = true;
@@ -1895,46 +1896,57 @@ void ptx_thread_info::ptx_exec_inst(warp_inst_t &inst, unsigned lane_id) {
           }
           // ========================================================================
           // Deformable Attention CALL Interception
+          // Always intercept when deform_attn is available, regardless of functional_sim_enabled
           // ========================================================================
-          else if (fname.find("deform_pcb") != std::string::npos) {
-            // Deformable Attention PCB pseudo-CALL handling
-            core_t *core = get_core();
-            deform_pcb_impl(pI, core, inst);
+          if (get_core()->get_gpu()->get_shader_config()->gpgpu_deform_attn_avail) {
+            if (fname.find("deform_pcb") != std::string::npos) {
+              // Deformable Attention PCB pseudo-CALL handling
+              if (lane_id == 0) {
+                core_t *core = get_core();
+                deform_pcb_impl(pI, core, inst);
+              }
 
-            is_fmr_call = true;  // Reuse the flag to skip normal processing
-            skip = true;
-            delete pJ;
-            pI = pI_saved;
-          }
-          else if (fname.find("deform_tbc") != std::string::npos) {
-            // Deformable Attention TBC pseudo-CALL handling
-            core_t *core = get_core();
-            deform_tbc_impl(pI, core, inst);
+              is_fmr_call = true;  // Reuse the flag to skip normal processing
+              skip = true;
+              delete pJ;
+              pI = pI_saved;
+            }
+            else if (fname.find("deform_tbc") != std::string::npos) {
+              // Deformable Attention TBC pseudo-CALL handling
+              if (lane_id == 0) {
+                core_t *core = get_core();
+                deform_tbc_impl(pI, core, inst);
+              }
 
-            is_fmr_call = true;
-            skip = true;
-            delete pJ;
-            pI = pI_saved;
-          }
-          else if (fname.find("deform_tma") != std::string::npos) {
-            // Deformable Attention TMA pseudo-CALL handling
-            core_t *core = get_core();
-            deform_tma_impl(pI, core, inst);
+              is_fmr_call = true;
+              skip = true;
+              delete pJ;
+              pI = pI_saved;
+            }
+            else if (fname.find("deform_tma") != std::string::npos) {
+              // Deformable Attention TMA pseudo-CALL handling
+              if (lane_id == 0) {
+                core_t *core = get_core();
+                deform_tma_impl(pI, core, inst);
+              }
 
-            is_fmr_call = true;
-            skip = true;
-            delete pJ;
-            pI = pI_saved;
-          }
-          else if (fname.find("deform_interp") != std::string::npos) {
-            // Deformable Attention Interpolation pseudo-CALL handling
-            core_t *core = get_core();
-            deform_interp_impl(pI, core, inst);
+              is_fmr_call = true;
+              skip = true;
+              delete pJ;
+              pI = pI_saved;
+            }
+            else if (fname.find("deform_interp") != std::string::npos) {
+              // Deformable Attention Interpolation pseudo-CALL handling
+              if (lane_id == 0) {
+                core_t *core = get_core();
+                deform_interp_impl(pI, core, inst);
+              }
 
-            is_fmr_call = true;
-            skip = true;
-            delete pJ;
-            pI = pI_saved;
+              is_fmr_call = true;
+              skip = true;
+              delete pJ;
+              pI = pI_saved;
+            }
           }
         }
       }

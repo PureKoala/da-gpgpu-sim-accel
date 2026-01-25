@@ -6,6 +6,39 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This is a forked distribution of GPGPU-Sim (v4.2.0) with AccelWattch power modeling and research extensions for deformable attention (DeformAttn) and FMR (warp-cooperative tile loader optimization). It's a cycle-level GPU simulator that models NVIDIA-like GPUs using PTX-level execution.
 
+## Current Development Status (2025-01-23)
+
+**Active Feature**: Deformable Attention Hardware Accelerator Implementation
+**Current Phase**: P1 - Functional Verification (Numerical Correctness Testing)
+**Last Milestone**: ✅ P0 Complete - Parameter passing, debug output, compilation verified
+**Next Milestone**: 🧪 P1 - Baseline vs Optimized numerical consistency
+
+### Quick Status Check
+- ✅ Function call interception working
+- ✅ All 4 `deform_*_impl()` functions with complete parameter reading
+- ✅ Compilation passes (gcc-13.3.0)
+- ✅ Debug output via `-gpgpu_tensorcore_debug 1`
+- ⏳ Awaiting numerical verification tests
+- ⏳ Performance statistics not yet implemented
+
+### For New Contributors
+If working on DeformAttn implementation, refer to:
+- `DevDocs/IMPLEMENTATION.md` - Current implementation details and plans (PRIMARY SOURCE)
+- `DevDocs/TODO.md` - Detailed task list and priorities (TASK TRACKING)
+- `DevDocs/ARCHITECTURE.md` - Historical design documentation (ARCHIVED - for reference only)
+
+**Recent Changes (2025-01-23)**:
+- ✅ P0 Complete: Full parameter passing implementation in all 4 `deform_*_impl()` functions
+- ✅ Debug output added: Use `-gpgpu_tensorcore_debug 1` to see PCB/TBC/TMA/INTERP details
+- ✅ Compilation verified: Successfully builds with gcc-13.3.0
+- 🧪 P1 In Progress: Numerical verification testing (Baseline vs Optimized comparison)
+
+**Focus Areas for Current Work**:
+1. **P1 Testing**: Run and compare Baseline vs Optimized kernels (highest priority)
+2. **Debug Analysis**: Verify parameter passing through debug logs
+3. **Edge Cases**: Test zero-weight, out-of-bounds, and discrete scenarios
+4. **DO NOT**: Attempt to integrate execution units or pipeline dispatch - not used in this architecture
+
 ## Build Commands
 
 ### Prerequisites
@@ -91,23 +124,12 @@ bash run.sh
   - Timing path: `ld_sample_fmr_impl()` sets `inst.op = FMR_SAMPLE_OP`
 - **Purpose**: Optimized tile loading for attention workloads
 
-#### Deformable Attention Function Model (In Development)
-- **Location**: `DevDocs/` (design docs), `src/` (implementation)
-- **Design Documents**:
-  - `DevDocs/DeformAttn_Architecture.md` - Architecture design and module specifications
-  - `DevDocs/DeformAttn_Development_Guide.md` - Implementation guide and development workflow
-  - `DevDocs/Orient.md` - Algorithm requirements and module mapping (CRITICAL)
-- **Components** (5-stage pipeline):
-  - **PCB** (Pre-Check Block): Weight pruning, generates sparse mask (1 cycle)
-  - **GTC** (Gated Tensor Core): Sparse-aware computation with operand isolation (0 cycle, parallel)
-  - **TBC** (Tile Boundary Check): Boundary check + mode detection (4-7 cycles, adaptive)
-  - **TMA & Storage** (Tile Memory Access): Adaptive tile loading + conflict-free storage (16+6 cycles)
-  - **Interpolation**: Bilinear interpolation with conflict-free access (3 cycles)
-- **Integration Strategy**:
-  - Use CUDA Function Call interception mechanism
-  - Map operations to pseudo-instructions (opcodes 0xD0-0xD3)
-  - Functional model + fixed latency simulation (no timing-level implementation)
-  - Target: Function correctness, end-to-end latency estimation, performance data collection
+#### Deformable Attention Accelerator
+- **Location**: `src/cuda-sim/` (implementation), `DevDocs/` (design docs)
+- **Status**: P0 Complete (compilation verified), P1 In Progress (numerical testing)
+- **Components**: 5-stage pipeline (PCB → GTC → TBC → TMA & Storage → Interpolation)
+- **Integration**: Function call interception ONLY (no PTX pseudo-instructions)
+- **See Section**: "Deformable Attention Implementation Notes" for complete details
 
 ### Algorithm Requirements (from Orient.md)
 
@@ -163,8 +185,8 @@ bash run.sh
 # Setup environment
 source setup_environment
 
-# Copy config files to application directory
-cp configs/QuadroFX5800/* /path/to/app/
+# Copy config files to application directory (use RTX 3070 for DeformAttn)
+cp configs/RTX3070/* /path/to/app/
 
 # Run application (uses GPGPU-Sim libraries instead of real CUDA)
 ./your_cuda_application
@@ -172,36 +194,15 @@ cp configs/QuadroFX5800/* /path/to/app/
 
 ### Configuration Files
 - Location: `configs/`
-- Key configs: `QuadroFX5800/`, `GTX480/`
+- Key configs: `QuadroFX5800/`, `GTX480/`, **`RTX3070/` (Primary test target)**
 - Common options:
   - `-gpgpu_ptx_force_max_capability <version>`
   - `-power_simulation_enabled 1`
-  - `-gpgpu_deform_attn_enable 1`
+  - `-gpgpu_deform_attn_avail 1`
 
-## Testing
-
-### Unit Tests
-- Individual modules in `src/cuda-sim/` and `src/gpgpu-sim/`
-- DeformAttn tests in `deAttn_test_fmr/`
-
-### Regression Tests
-- Use Docker for consistent testing (see README.md)
-- Command: `docker run --privileged ... aamodt/gpgpu-sim_regress:latest`
-
-### Debugging
-```bash
-# Build debug version
-source setup_environment debug
-make
-
-# Run with gdb
-gdb --args ./your_application
-```
-
-### Performance Profiling
-- Enable tracing: Set `TRACE=1` during build
-- Stats output: Check `gpgpu_sim` stats in simulation output
-- DeformAttn profiling: See `deAttn_fp16_fmr/PERFORMANCE_PROFILING.md`
+**Target GPU for DeformAttn Testing**: RTX 3070
+- Use config from `configs/RTX3070/` or `deAttn_fp16_fmr/gpgpusim.config`
+- SM version: 8.6 (Ampere architecture)
 
 ## Key Files Reference
 
@@ -215,14 +216,7 @@ gdb --args ./your_application
 - `setup_environment` - Environment setup script (must source before build)
 - `Makefile` - Top-level build system
 - `CMakeLists.txt` - CMake build configuration
-- `configs/` - Architecture configuration files
-
-### Deformable Attention
-- `deAttn/README.md` - DeformAttn algorithm overview
-- `deAttn_fp16_fmr/PROJECT_OVERVIEW.md` - FMR extension details
-- `DevDocs/DeformAttn_Architecture.md` - Architecture design and module specifications
-- `DevDocs/DeformAttn_Development_Guide.md` - Implementation guide and development workflow
-- `DevDocs/FMR_Implementation_Summary.md` - FMR implementation reference
+- `configs/RTX3070/` - RTX 3070 configuration (primary test target)
 
 ## Common Tasks
 
@@ -237,7 +231,7 @@ make -j$(nproc)
 ```bash
 cd /path/to/test
 source setup_environment
-cp configs/QuadroFX5800/* .
+cp configs/RTX3070/* .  # Use RTX 3070 config (primary test target)
 ./test_application
 ```
 
@@ -263,6 +257,20 @@ cat out/test_RTX3070.txt
 
 ## Deformable Attention Implementation Notes
 
+### ⚠️ CRITICAL ARCHITECTURE DECISION: Function Call Only
+
+**Implementation Strategy**:
+- ✅ **Function Call Interception ONLY**: All functionality via `cuda-sim.cc` string matching
+- ❌ **NO PTX Pseudo-Instructions**: CUDA compiler cannot recognize custom PTX opcodes
+- ❌ **NO Execution Units**: `deform_attn_exec_unit` class NOT used (exists for reference only)
+- ❌ **NO Pipeline Dispatch**: No integration in `shader.cc` `issue_warp()` or `create_exec_pipeline()`
+- ❌ **NO Opcode Definitions**: No entries in `opcodes.def`
+
+**Why This Approach**:
+- CUDA/nvcc compilation produces PTX that cannot reference custom instructions
+- Function call interception is the ONLY viable path without modifying CUDA toolkit
+- Successfully proven by FMR implementation (`ld_sample_fmr`)
+
 ### Integration Approach
 - **Function Call Interception**: Use CUDA Function Call mechanism to intercept DeformAttn operations
 - **Fixed Latency Model**: Each module has fixed cycle count (1-16 cycles) for simplicity
@@ -271,10 +279,10 @@ cat out/test_RTX3070.txt
 
 ### Implementation Status
 
-#### ✅ Completed
+#### ✅ Completed (as of 2025-01-23)
 1. **Core Data Structures** (`src/cuda-sim/deform_attn_unit.h/.cc`)
    - 5-stage pipeline: PCB → GTC → TBC → TMA & Storage → Interpolation
-   - Top-level unit: `deform_attn_unit` with流水线管理
+   - Top-level unit: `deform_attn_unit` with pipeline management
    - Fixed latency: 1 + 0 + 4-7 + 16 + 6 + 3 = ~30-33 cycles
 
 2. **Function Call Interception** (`src/cuda-sim/cuda-sim.cc`)
@@ -282,80 +290,92 @@ cat out/test_RTX3070.txt
    - `__deform_tbc()` → `deform_tbc_impl()` (4-7 cycles)
    - `__deform_tma()` → `deform_tma_impl()` (16 cycles)
    - `__deform_interp()` → `deform_interp_impl()` (3 cycles)
+   - **P0 COMPLETE**: Full parameter passing implementation using `.param` space
 
 3. **Configuration Options** (`src/gpgpu-sim/gpu-sim.cc`)
-   - 10 configuration options for latency and availability
+   - 8 configuration options for latency and availability
    - Example: `-gpgpu_deform_pcb_latency 1`
 
-4. **Pipeline Integration** (`src/gpgpu-sim/shader.h`)
-   - Added `ID_OC_DEFORM`, `OC_EX_DEFORM` pipeline stages
-   - Added `deform_attn_exec_unit` class declaration
-   - Added `deform_attn_unit *m_deform_attn_unit` member
-   - Added DeformAttn configuration options
+4. **Functional Model Implementation** (`src/cuda-sim/instructions.cc`)
+   - All 4 `deform_*_impl()` functions with complete parameter reading
+   - Debug output support via `-gpgpu_tensorcore_debug 1`
+   - PCB: Displays pruning rate and valid point counts
+   - TBC: Displays bounding box, tile parameters, access patterns
 
-5. **Test Files** (`deAttn_fp16_fmr/`)
-   - `test_deform_attn.cu`: CUDA test kernel
-   - `Makefile.test`: Test build system
+5. **Test Files** (`deAttn_optim/`, `deAttn_base/`)
+   - Baseline kernel: Numerical reference implementation
+   - Optimized kernel: Hardware-accelerated with fallback paths
+   - Test harness and build system
 
-#### ⏳ Pending
-1. **shader.cc Integration** (Highest Priority)
-   - Implement `deform_attn_exec_unit` class
-   - Create DeformAttn unit in `create_exec_pipeline()`
-   - Add instruction dispatch in `issue_warp()`
-   - Initialize configuration in `shader_core_config` constructor
+6. **Compilation Verified** ✅
+   - Successfully compiles with gcc-13.3.0
+   - All DeformAttn support modules integrated
 
-2. **Performance Statistics** (`src/gpgpu-sim/stats.cc`)
-   - Add DeformAttn performance counters
-   - Collect cycle counts, operation counts, etc.
+#### ⏳ In Progress / Pending
+1. **P1 - Functional Verification** (Current Priority)
+   - Numerical consistency testing: Baseline vs Optimized
+   - Run with `-gpgpu_deform_attn_avail 0` (Baseline)
+   - Run with `-gpgpu_deform_attn_avail 1` (Optimized)
+   - Verify output difference < 1e-3 using `torch.allclose()`
 
-3. **Compilation & Testing**
-   - Compile GPGPU-Sim with new code
-   - Run test programs
-   - Verify functionality
+2. **P2 - Performance Statistics** (Next Phase)
+   - Add performance counters to `shader_core_stats`
+   - PCB pruning rate statistics
+   - TBC mode distribution (Discrete/Tile16/Tile32h/Tile32v)
+   - TMA tile loading and reuse statistics
 
-### Implementation Phases (Updated)
+3. **P2 - Edge Case Testing**
+   - Zero-weight scenarios (full PCB pruning)
+   - Discrete coordinates (no aggregation in TBC)
+   - Out-of-bounds coordinates (TMA boundary checks)
+
+### Implementation Phases (Updated 2025-01-23)
 
 1. **Phase 1: Function Call Interception** ✅ **COMPLETED**
-   - CUDA Function Call 拦截机制
-   - 4 个函数的拦截逻辑
+   - CUDA Function Call interception mechanism
+   - 4 function interception handlers in `cuda-sim.cc`
 
 2. **Phase 2: Functional Model Implementation** ✅ **COMPLETED**
-   - 5 个模块的功能模型（固定延迟）
-   - Top-Level unit 管理
+   - 5 module functional models with fixed latency
+   - Complete parameter reading using `.param` space (FMR-style)
+   - Debug output support integrated
 
-3. **Phase 3: Pipeline Integration** ⏳ **IN PROGRESS**
-   - `deform_attn_exec_unit` 类实现
-   - 集成到 `shader_core_ctx`
-   - 指令分发逻辑
+3. **Phase 3: Compilation & Integration** ✅ **COMPLETED**
+   - Successful compilation with gcc-13.3.0
+   - Configuration system integrated into `gpu-sim.cc`
+   - Baseline and Optimized kernels implemented
 
-4. **Phase 4: Memory Integration** ⏳ **PENDING**
-   - TMA 与 L2 Cache 集成
-   - Storage 与 Shared Memory 集成
-   - Bank 冲突检测
+4. **Phase 4: Validation & Testing** 🧪 **IN PROGRESS**
+   - P1: Numerical correctness verification (Current)
+   - Edge case testing (Zero weights, OOB coordinates, discrete patterns)
+   - Debug log analysis to verify execution flow
 
 5. **Phase 5: Performance Statistics** ⏳ **PENDING**
-   - 添加性能计数器
-   - 添加延迟直方图
-   - 添加访存统计
+   - Performance counters (pruning rate, mode distribution, tile reuse)
+   - Latency histograms per stage
+   - Memory access statistics
 
-6. **Phase 6: Validation & Debugging** ⏳ **PENDING**
-   - 单元测试
-   - 集成测试
-   - 性能分析
+6. **Phase 6: Analysis & Optimization** ⏳ **PENDING**
+   - Performance profiling and bottleneck analysis
+   - Parameter sensitivity studies
+   - Final experimental data for publication
 
 ### Key Design Decisions
-- **Fixed Latency**: Each module has fixed cycle count (1-16 cycles) for simplicity
-- **Function Call Interception Only**: No pseudo-instructions (FMR's `ld.sample.fmr` 实际未使用)
-- **Adaptive Behavior**: TBC adapts based on sampling point density (low/high聚集度)
+- **Function Call Interception ONLY**: NO PTX pseudo-instructions, NO execution units, NO pipeline dispatch
+  - Reason: CUDA compiler cannot recognize custom PTX instructions
+  - All functionality achieved through function call interception in `cuda-sim.cc`
+- **Fixed Latency Model**: Each module has fixed cycle count (1-16 cycles) for simplicity
+  - PCB: 1 cycle, TBC: 4-7 cycles (adaptive), TMA: 16 cycles, Storage: 6 cycles, Interpolation: 3 cycles
+- **Adaptive Behavior**: TBC adapts based on sampling point density (First-8 voting mechanism)
 - **Conflict-Free Storage**: Self-adaptive Bank mapping to eliminate conflicts
-- **Simplified CAM**: Use hash table instead of actual CAM for tracker management
+- **Parameter Passing**: Uses `.param` space reading (FMR-style implementation)
 
 ### Development Tips
-- **Start with shader.cc**: Implement `deform_attn_exec_unit` first
-- **Reference FMR**: 80% of code structure can be借鉴
-- **Test Incrementally**: Test each module separately
-- **Use Fixed Latency**: No need to simulate dynamic memory delays
-- **Focus on Functionality**: Functional correctness is the priority
+- **Function Call First**: All hardware acceleration via function interception, NOT execution units
+- **Reference FMR**: Parameter passing mechanism follows `ld_sample_fmr_impl()` pattern
+- **Test Incrementally**: Use `-gpgpu_tensorcore_debug 1` to verify parameter correctness
+- **Focus on Functionality**: Functional correctness is the priority over timing accuracy
+- **No Pipeline Dispatch**: The `deform_attn_exec_unit` class exists but is NOT used
 
 ### Configuration Example
 ```
@@ -371,60 +391,113 @@ cat out/test_RTX3070.txt
 
 ### CUDA Usage Example
 ```cpp
+// Device function declarations (see deAttn_optim/src/deform_attn/cuda/deform_attn_accelerator.cuh)
 extern "C" __device__ void __deform_pcb(float* weights, float threshold, bool enable, bool* mask);
-extern "C" __device__ void __deform_tbc(float* abs_coords, bool* valid_coords, int* mode, int* tile_size, int* base_x, int* base_y);
-extern "C" __device__ void __deform_tma(float* tile_data, unsigned long long gmem_base, unsigned long long smem_base, int tile_x, int tile_y, int pitch, int mode, int tile_size);
-extern "C" __device__ void __deform_interp(float* output, float* tile_data, float* coords, float* weights);
+extern "C" __device__ void __deform_tbc(float* abs_coords, bool* valid_coords, int* mode, ...);
+extern "C" __device__ void __deform_tma(float* tile_data, unsigned long long gmem_base, ...);
+extern "C" __device__ void __deform_interp(float* output, float* tile_data, ...);
 
-__global__ void my_kernel(float* output, float* weights, float* coords, float* tile_data, float threshold) {
-    extern __shared__ float smem[];
-
-    bool mask[16*16];
-    __deform_pcb(weights, threshold, true, mask);
-
-    int mode, tile_size, base_x, base_y;
-    bool valid[16*16];
-    __deform_tbc(coords, valid, &mode, &tile_size, &base_x, &base_y);
-
-    __deform_tma(tile_data, gmem_base, smem_base, base_x, base_y, pitch, mode, tile_size);
-
-    __deform_interp(output, tile_data, coords, weights);
-}
+// Usage: See deAttn_optim/src/deform_attn/cuda/ms_deform_attn_im2col_cuda.cuh for complete example
 ```
 
-### Related Documents
-- `DevDocs/DeformAttn_Architecture.md` - Architecture design and module specifications
-- `DevDocs/DeformAttn_Development_Guide.md` - Implementation guide and development workflow
-- `DevDocs/Orient.md` - Algorithm requirements and module mapping (CRITICAL)
-- `DevDocs/FMR_Implementation_Summary.md` - FMR implementation reference
 
-### Key Algorithm Requirements (from Orient.md)
+## Testing DeformAttn Implementation
 
-#### Baseline (Naive) Implementation
-- **Core Feature**: No sparse pruning, no shared memory buffering, no coalesced memory access
-- **Performance**: Worst case baseline (100% DRAM access, 68.3% bank conflicts)
-- **Corresponding Modules**: None - all computation in GPU pipeline serial execution
+### Current Testing Phase: P1 Functional Verification
 
-#### Optimized (5-Stage Pipeline) Implementation
-- **Core Feature**: Sparse pruning, tile-based cooperation, shared memory buffering
-- **Performance**: 4-8× improvement over baseline
-- **Corresponding Modules**: Complete 5-stage pipeline architecture
+**Objective**: Verify numerical correctness between Baseline and Optimized kernels
 
-#### Module Mapping to Kernel Execution Flow
+```bash
+# Step 1: Build GPGPU-Sim with DeformAttn support
+cd $GPGPUSIM_ROOT
+source setup_environment
+make clean && make -j$(nproc)
 
-| Optimization Phase | Corresponding Module | Function | Latency | Key Technology |
-|-------------------|---------------------|----------|---------|----------------|
-| **Phase I: Sparsity Pruning** | **PCB (Pre-Check Block)** | Weight pre-filtering, generates sparse mask | 1 cycle (fixed) | Threshold comparison, mask generation |
-| **Phase II: Sparse-Aware Compute** | **GTC (Gated Tensor Core)** | Operand isolation, marks valid coordinates | 0 cycle (parallel) | Invalid point coordinate zeroing |
-| **Phase III: Spatial Aggregation Decision** | **TBC (Tile Boundary Check)** | Adaptive aggregation decision, determines loading strategy | 4-7 cycles (adaptive) | Two-stage decision, mode detection |
-| **Phase IV: Adaptive Data Loading** | **TMA & Storage** | Tile loading + conflict-free storage management | 22 cycles (16+6) | Adaptive bank mapping, tracker management |
-| **Phase V: Conflict-Free Compute** | **Interpolation** | Bilinear interpolation computation | 3 cycles | Conflict-free read, Swizzling |
+# Step 2: Run Baseline (reference implementation)
+cd deAttn_base
+make
+./test_deform_attn > baseline_output.txt
 
-#### Total Latency Budget
-- **Low clustering scenario** (Discrete mode): ~30 cycles
-  - PCB(1) + GTC(0) + TBC(4) + TMA(16) + Storage(6) + Interpolation(3) = 30 cycles
-- **High clustering scenario** (Tile mode): ~33 cycles
-  - PCB(1) + GTC(0) + TBC(7) + TMA(16) + Storage(6) + Interpolation(3) = 33 cycles
+# Step 3: Run Optimized (hardware-accelerated)
+cd ../deAttn_optim
+make
+export GPGPUSIM_CONFIG_FILE=./gpgpusim.config
+# Ensure gpgpusim.config contains:
+#   -gpgpu_deform_attn_avail 1
+#   -gpgpu_tensorcore_debug 1  # For debug output
+./test_deform_attn > optimized_output.txt
+
+# Step 4: Numerical comparison
+# Expected: Output difference < 1e-3
+python -c "
+import numpy as np
+baseline = np.loadtxt('baseline_output.txt')
+optimized = np.loadtxt('optimized_output.txt')
+diff = np.abs(baseline - optimized)
+print(f'Max difference: {diff.max()}')
+print(f'Mean difference: {diff.mean()}')
+assert diff.max() < 1e-3, 'Numerical consistency check failed'
+print('✅ Numerical verification PASSED')
+"
+```
+
+### Debug Output Analysis
+
+Enable detailed logging to verify parameter passing:
+
+```bash
+# Add to gpgpusim.config
+-gpgpu_tensorcore_debug 1
+
+# Expected debug output format:
+# [PCB] Threshold: 0.05, Valid points: 187/256 (73.0%), Pruning rate: 27.0%
+# [TBC] BBox: (10,15)-(26,31), Mode: Horizontal, Tile size: 16x16
+# [TMA] Loading tile from GMEM@0x... to SMEM@0x..., Mode: 0 (Horizontal)
+# [INTERP] Local coord: (3.2, 7.8), Result: 0.xyz
+```
+
+### Known Issues & Troubleshooting
+
+1. **Function calls not intercepted**
+   - Check: `grep "deform_pcb" simulator_output.txt` should show calls
+   - Verify: Function names match exactly (`__deform_pcb`, etc.)
+   - Debug: Add printf in `cuda-sim.cc` interception code
+
+2. **Numerical differences > 1e-3**
+   - Check: Baseline and Optimized use same input data
+   - Verify: Fallback path in Optimized kernel works correctly
+   - Debug: Compare intermediate values (after PCB, after TBC, etc.)
+
+3. **Compilation errors**
+   - Verify: gcc version (tested with gcc-13.3.0)
+   - Check: CUDA_INSTALL_PATH is set correctly
+   - Clean: `make clean` before rebuilding
+
+## Quick Reference
+
+### Target GPU Configuration
+- **Primary GPU**: NVIDIA RTX 3070 (Ampere, SM 8.6)
+- **Config Location**: `configs/RTX3070/` or `deAttn_fp16_fmr/gpgpusim.config`
+- **Test Output**: `deAttn_fp16_fmr/out/test_RTX3070.txt`
+
+### DeformAttn Key Commands
+```bash
+# Build simulator
+source setup_environment && make -j$(nproc)
+
+# Run DeformAttn test (RTX 3070 config)
+cd deAttn_fp16_fmr && bash run.sh
+
+# Check results
+cat out/test_RTX3070.txt
+```
+
+### Debug Configuration
+```bash
+# Enable debug output in gpgpusim.config
+-gpgpu_tensorcore_debug 1      # PCB/TBC/TMA/INTERP debug logs
+-gpgpu_deform_attn_avail 1     # Enable DeformAttn accelerator
+```
 
 ## General Notes
 
@@ -432,4 +505,5 @@ __global__ void my_kernel(float* output, float* weights, float* coords, float* t
 - Functional model (PTX) is cycle-accurate for instruction semantics
 - Timing model (micro-arch) is configurable for different GPU architectures
 - DeformAttn extensions are functional models with fixed latencies (no timing-level implementation)
-- FMR optimization models warp-cooperative tile loading for attention workloads
+- **DeformAttn Status**: Compilation complete ✅, Numerical verification in progress 🧪
+- **Target GPU**: RTX 3070 (Ampere SM 8.6)
